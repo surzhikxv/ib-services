@@ -65,8 +65,11 @@ def seed_reference_data(session: Session) -> None:
 
 
 def init_db(engine: Engine) -> None:
-    """Создаёт таблицы и заливает сиды справочников (идемпотентно)."""
+    """Создаёт таблицы, заливает сиды справочников и вьюхи дашборда (идемпотентно)."""
+    from kontur.dashboard.views import create_views
+
     Base.metadata.create_all(engine)
     with make_session_factory(engine)() as session:
         seed_reference_data(session)
         session.commit()
+    create_views(engine)

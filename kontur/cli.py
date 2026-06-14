@@ -26,6 +26,15 @@ def _cmd_db_init(args) -> int:
     return 0
 
 
+def _cmd_db_views(args) -> int:
+    from kontur.dashboard.views import VIEWS, create_views
+
+    engine = make_engine(get_settings().database_url)
+    create_views(engine)
+    print(f"OK: вьюхи дашборда созданы ({', '.join(VIEWS)})")
+    return 0
+
+
 def _cmd_db_schema(args) -> int:
     dialect = {"postgresql": postgresql.dialect(), "sqlite": sqlite.dialect()}[args.dialect]
     parts = []
@@ -58,18 +67,38 @@ def _cmd_bothelp_sync(args) -> int:
     return 0
 
 
+def _cmd_metabase_provision(args) -> int:
+    import os
+
+    from kontur.dashboard.metabase import provision
+
+    url = os.getenv("METABASE_URL")
+    user = os.getenv("METABASE_USER")
+    pwd = os.getenv("METABASE_PASSWORD")
+    if not (url and user and pwd):
+        print("ERROR: задай METABASE_URL / METABASE_USER / METABASE_PASSWORD в .env", file=sys.stderr)
+        return 2
+    summary = provision(url, user, pwd)
+    print("Metabase provision OK →", json.dumps(summary, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kontur", description="Контур роста — CLI")
     sub = parser.add_subparsers(dest="group", required=True)
 
     db = sub.add_parser("db", help="операции с БД").add_subparsers(dest="action", required=True)
-    db.add_parser("init", help="создать схему и сиды").set_defaults(func=_cmd_db_init)
+    db.add_parser("init", help="создать схему, сиды и вьюхи").set_defaults(func=_cmd_db_init)
+    db.add_parser("views", help="(пере)создать вьюхи дашборда").set_defaults(func=_cmd_db_views)
     schema = db.add_parser("schema", help="вывести DDL")
     schema.add_argument("--dialect", default="postgresql", choices=["postgresql", "sqlite"])
     schema.set_defaults(func=_cmd_db_schema)
 
     bh = sub.add_parser("bothelp", help="коннектор BotHelp").add_subparsers(dest="action", required=True)
     bh.add_parser("sync", help="выгрузить данные BotHelp в озеро").set_defaults(func=_cmd_bothelp_sync)
+
+    mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
+    mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
 
     return parser
 

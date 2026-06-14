@@ -34,6 +34,15 @@ services:
     environment:
       # внутри сети compose БД доступна по имени сервиса postgres
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kontur}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-kontur}
+      # для provision Metabase (источник-БД подключается по этим параметрам)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-kontur}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-kontur}
+      METABASE_URL: ${METABASE_URL:-http://metabase:3000}
+      METABASE_USER: ${METABASE_USER:-}
+      METABASE_PASSWORD: ${METABASE_PASSWORD:-}
       BOTHELP_CLIENT_ID: ${BOTHELP_CLIENT_ID}
       BOTHELP_CLIENT_SECRET: ${BOTHELP_CLIENT_SECRET}
       BOTHELP_OAUTH_URL: ${BOTHELP_OAUTH_URL:-https://oauth.bothelp.io/oauth2/token}
