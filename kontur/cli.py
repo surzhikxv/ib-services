@@ -1,0 +1,83 @@
+"""CLI «Контур роста».
+
+    python -m kontur.cli db init                 # создать схему + сиды
+    python -m kontur.cli db schema [--dialect postgresql]  # вывести DDL
+    python -m kontur.cli bothelp sync            # выгрузить BotHelp на живых данных
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.schema import CreateTable
+
+from kontur.config import get_settings
+from kontur.db import init_db, make_engine, make_session_factory
+from kontur.models import Base
+
+
+def _cmd_db_init(args) -> int:
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    print(f"OK: схема и сиды созданы в {engine.url}")
+    return 0
+
+
+def _cmd_db_schema(args) -> int:
+    dialect = {"postgresql": postgresql.dialect(), "sqlite": sqlite.dialect()}[args.dialect]
+    parts = []
+    for table in Base.metadata.sorted_tables:
+        parts.append(str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
+    print(("\n\n").join(parts))
+    return 0
+
+
+def _cmd_bothelp_sync(args) -> int:
+    from kontur.connectors.bothelp.client import BotHelpClient
+    from kontur.connectors.bothelp.sync import sync_bothelp
+
+    settings = get_settings()
+    if not settings.bothelp_client_id or not settings.bothelp_bot_referral:
+        print("ERROR: заполни BOTHELP_* в .env", file=sys.stderr)
+        return 2
+
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    with BotHelpClient(
+        client_id=settings.bothelp_client_id,
+        client_secret=settings.bothelp_client_secret,
+        oauth_url=settings.bothelp_oauth_url,
+        api_base=settings.bothelp_api_base,
+    ) as client:
+        stats = sync_bothelp(client, factory, bot_referral=settings.bothelp_bot_referral)
+    print("BotHelp sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="kontur", description="Контур роста — CLI")
+    sub = parser.add_subparsers(dest="group", required=True)
+
+    db = sub.add_parser("db", help="операции с БД").add_subparsers(dest="action", required=True)
+    db.add_parser("init", help="создать схему и сиды").set_defaults(func=_cmd_db_init)
+    schema = db.add_parser("schema", help="вывести DDL")
+    schema.add_argument("--dialect", default="postgresql", choices=["postgresql", "sqlite"])
+    schema.set_defaults(func=_cmd_db_schema)
+
+    bh = sub.add_parser("bothelp", help="коннектор BotHelp").add_subparsers(dest="action", required=True)
+    bh.add_parser("sync", help="выгрузить данные BotHelp в озеро").set_defaults(func=_cmd_bothelp_sync)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

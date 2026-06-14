@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kontur"
+version = "0.1.0"
+description = "Контур роста — озеро данных и ИИ-курирование для инфобизнеса (MVP)"
+requires-python = ">=3.11"
+# Ядро: коннектор + слой БД. Чистый Python — ставится где угодно, в т.ч. на 3.14.
+dependencies = [
+    "httpx[socks]>=0.27",      # socks: на dev-машине трафик идёт через локальный SOCKS-прокси
+    "SQLAlchemy>=2.0.36",
+    "python-dotenv>=1.0",
+]
+
+# Тяжёлые/нативные зависимости вынесены в extras: их колёса есть не для всех версий
+# Python (psycopg/pydantic на 3.14 пока без wheel). Боевой образ ставит .[api,postgres].
+[project.optional-dependencies]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+kontur = "kontur.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kontur*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
