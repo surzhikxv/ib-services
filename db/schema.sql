@@ -1,3 +1,15 @@
+CREATE TABLE ai_reports (
+	id SERIAL NOT NULL, 
+	kind VARCHAR(32) NOT NULL, 
+	period VARCHAR(64), 
+	question TEXT, 
+	summary TEXT NOT NULL, 
+	digest JSONB, 
+	model VARCHAR(64), 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id)
+);
+
 CREATE TABLE channels (
 	id SERIAL NOT NULL, 
 	platform VARCHAR(50) NOT NULL, 

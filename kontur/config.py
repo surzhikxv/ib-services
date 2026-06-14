@@ -39,6 +39,9 @@ class Settings:
     bothelp_oauth_url: str
     bothelp_api_base: str
     bothelp_bot_referral: str
+    llm_api_key: str
+    llm_model: str
+    llm_effort: str
 
 
 def get_settings() -> Settings:
@@ -49,4 +52,7 @@ def get_settings() -> Settings:
         bothelp_oauth_url=os.getenv("BOTHELP_OAUTH_URL", "https://oauth.bothelp.io/oauth2/token"),
         bothelp_api_base=os.getenv("BOTHELP_API_BASE", "https://api.bothelp.io"),
         bothelp_bot_referral=os.getenv("BOTHELP_BOT_REFERRAL", ""),
+        llm_api_key=os.getenv("LLM_API_KEY", ""),
+        llm_model=os.getenv("LLM_MODEL", "claude-opus-4-8"),
+        llm_effort=os.getenv("LLM_EFFORT", "medium"),
     )

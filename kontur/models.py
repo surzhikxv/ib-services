@@ -244,3 +244,20 @@ class SyncRun(Base):
     status: Mapped[str] = mapped_column(String(32), default="running")  # running/ok/error
     stats: Mapped[dict | None] = mapped_column(JSONType)
     error: Mapped[str | None] = mapped_column(Text)
+
+
+# --- Разборы ИИ-аналитика -------------------------------------------------
+
+class AiReport(Base):
+    """Разбор/ответ ИИ-аналитика: текст для владельца + срез данных, по которому он сделан."""
+
+    __tablename__ = "ai_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))  # weekly | adhoc
+    period: Mapped[str | None] = mapped_column(String(64))
+    question: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    digest: Mapped[dict | None] = mapped_column(JSONType)
+    model: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

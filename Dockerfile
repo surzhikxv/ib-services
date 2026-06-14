@@ -11,7 +11,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY kontur ./kontur
 COPY db ./db
-RUN pip install -e ".[api,postgres]"
+RUN pip install -e ".[api,postgres,ai]"
 
 EXPOSE 8000
 

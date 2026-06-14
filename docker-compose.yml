@@ -48,6 +48,11 @@ services:
       BOTHELP_OAUTH_URL: ${BOTHELP_OAUTH_URL:-https://oauth.bothelp.io/oauth2/token}
       BOTHELP_API_BASE: ${BOTHELP_API_BASE:-https://api.bothelp.io}
       BOTHELP_BOT_REFERRAL: ${BOTHELP_BOT_REFERRAL}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-opus-4-8}
+      LLM_EFFORT: ${LLM_EFFORT:-medium}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     # создаём схему+сиды, затем поднимаем API (приём вебхуков)
     command: sh -c "python -m kontur.cli db init && uvicorn kontur.api:app --host 0.0.0.0 --port 8000"
     ports:

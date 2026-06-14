@@ -83,6 +83,60 @@ def _cmd_metabase_provision(args) -> int:
     return 0
 
 
+def _make_llm():
+    """Строит модель из настроек или возвращает None, если нет ключа."""
+    from kontur.ai.llm import AnthropicLLM
+
+    settings = get_settings()
+    if not settings.llm_api_key:
+        return None
+    return AnthropicLLM(settings.llm_api_key, model=settings.llm_model, effort=settings.llm_effort)
+
+
+def _ai_dry(question: str | None) -> int:
+    """Печатает дайджест и промпт без вызова модели (ключ не нужен)."""
+    from kontur.ai.digest import build_digest
+    from kontur.ai.prompts import SYSTEM_PROMPT, build_question_prompt, build_report_prompt
+
+    engine = make_engine(get_settings().database_url)
+    factory = make_session_factory(engine)
+    digest = build_digest(factory)
+    prompt = build_question_prompt(digest, question) if question else build_report_prompt(digest)
+    print("=== SYSTEM ===\n" + SYSTEM_PROMPT)
+    print("\n=== PROMPT ===\n" + prompt)
+    return 0
+
+
+def _cmd_ai_report(args) -> int:
+    if args.show_prompt:
+        return _ai_dry(None)
+    from kontur.ai.analyst import generate_report
+
+    llm = _make_llm()
+    if llm is None:
+        print("ERROR: нет LLM_API_KEY в .env (или используй --show-prompt для пробы)", file=sys.stderr)
+        return 2
+    factory = make_session_factory(make_engine(get_settings().database_url))
+    report = generate_report(factory, llm, period=args.period)
+    print(report.summary)
+    return 0
+
+
+def _cmd_ai_ask(args) -> int:
+    if args.show_prompt:
+        return _ai_dry(args.question)
+    from kontur.ai.analyst import answer_question
+
+    llm = _make_llm()
+    if llm is None:
+        print("ERROR: нет LLM_API_KEY в .env (или используй --show-prompt для пробы)", file=sys.stderr)
+        return 2
+    factory = make_session_factory(make_engine(get_settings().database_url))
+    report = answer_question(factory, llm, args.question)
+    print(report.summary)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kontur", description="Контур роста — CLI")
     sub = parser.add_subparsers(dest="group", required=True)
@@ -99,6 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
+
+    ai = sub.add_parser("ai", help="ИИ-аналитик").add_subparsers(dest="action", required=True)
+    rep = ai.add_parser("report", help="еженедельный разбор по данным")
+    rep.add_argument("--period", default=None, help="метка периода, напр. 2026-W24")
+    rep.add_argument("--show-prompt", action="store_true", help="показать дайджест и промпт без вызова модели")
+    rep.set_defaults(func=_cmd_ai_report)
+    ask = ai.add_parser("ask", help="ответ на вопрос своими словами по данным")
+    ask.add_argument("question", help="вопрос владельца в кавычках")
+    ask.add_argument("--show-prompt", action="store_true", help="показать промпт без вызова модели")
+    ask.set_defaults(func=_cmd_ai_ask)
 
     return parser
 
