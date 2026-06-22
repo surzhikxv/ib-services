@@ -49,10 +49,17 @@ kontur/
     llm.py                   интерфейс LLMClient: AnthropicLLM (Claude) + FakeLLM; провайдер сменяем
     analyst.py               generate_report / answer_question → ai_reports
     telegram.py              формат разбора + отправка в Telegram (каркас)
+bot/
+  content.py                 парсер сырья BotHelp → шаги/блоки/кнопки (дословно, без правок)
+  render.py                  раскладка кнопок по рядам, тип кнопки (ссылка/заглушка)
+  preview.py                 оффлайн-превью 1:1 + побайтовая сверка с сырьём (без токена)
+  bot.py                     живой aiogram-бот: /all, /step N, /start
+  fetch.py                   выгрузка raw/bothelp_raw.json из BotHelp
 db/schema.sql                DDL озера для Postgres (сгенерирован из models.py)
 docs/metabase.md             как собрать дашборд (авто + руками)
 docs/ai-analyst.md           как работает ИИ-аналитик
-tests/                       pytest (маппинг, клиент, синк, вебхуки, дашборд, ИИ) — 82 теста
+docs/bot.md                  перенос воронки BotHelp → aiogram (контент 1:1)
+tests/                       pytest (маппинг, клиент, синк, вебхуки, дашборд, ИИ, бот) — 87 тестов
 docker-compose.yml           Postgres + n8n + Metabase + app
 ```
 
@@ -103,6 +110,34 @@ DDL: [`db/schema.sql`](db/schema.sql). Перегенерировать: `python
 - 28 шагов бота «Курс» маппятся в этапы: `welcome → package_choice → package_info → checkout
   (премиум/базовый/стандарт) → paid → churn`, служебные (`Действия/Сообщение/Задержка`) → `service`.
 - Точное время и сумму оплаты добираем **вебхуком** (Prodamus внутри BotHelp) — каркас готов.
+
+## Бот: воронка BotHelp → Telegram (aiogram)
+
+Пакет `bot/` — рабочая воронка на aiogram. После `/start` бот ведёт человека по шагам
+(приветствие → видео → выбор пакета → инфо → оплата); контент шагов перенесён из BotHelp
+дословно (тексты MarkdownV2, кнопки, вложения), переходы восстановлены из сырья. Подробно —
+[docs/bot.md](docs/bot.md).
+
+```bash
+./.venv/bin/pip install -e ".[bot]"
+
+python -m bot.fetch      # выгрузить сырьё BotHelp в raw/ (данные клиента, не в гит)
+python -m bot.preview    # проверка контента 1:1 без токена: текст+кнопки+вложения, побайтовая сверка
+
+export TELEGRAM_BOT_TOKEN=...   # токен у @BotFather
+python -m bot.bot        # воронка по /start; служебные /all (все шаги), /step N (один)
+```
+
+Оплата — **Prodamus**: кнопка «Оплата» ведёт на платёжную ссылку с зашитым `order_id`
+(tg_id+тариф); после оплаты бот принимает вебхук (проверка HMAC-подписи), пишет оплату в
+озеро, шлёт страницу «оплачено» и выдаёт доступ в канал. Настройка в `.env`
+(`PRODAMUS_DOMAIN` / `PRODAMUS_SECRET` / `PUBLIC_BASE_URL`), детали и шаги запуска «вживую»
+(туннель, доступ в канал) — в [docs/bot.md](docs/bot.md). Для прохода воронки без оплаты:
+`BOT_SIMULATE_PAYMENT=1 python -m bot.bot`.
+
+> На dev-машине бот сам ходит в Telegram через локальный прокси из окружения
+> (`ALL_PROXY`/`HTTPS_PROXY`) и берёт сертификаты из `certifi`; на сервере без прокси — прямое
+> соединение. Явно задать: `TELEGRAM_PROXY=socks5://…`.
 
 ## Безопасность
 

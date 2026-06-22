@@ -20,13 +20,14 @@ dependencies = [
 api = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 postgres = ["psycopg[binary]>=3.1"]
 ai = ["anthropic>=0.40"]   # ИИ-аналитик (Claude); провайдер сменяем — см. kontur/ai/llm.py
+bot = ["aiogram>=3.13", "aiohttp-socks>=0.8"]  # воронка BotHelp → Telegram-бот (пакет bot/); socks — для dev-прокси
 dev = ["pytest>=8"]
 
 [project.scripts]
 kontur = "kontur.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["kontur*"]
+include = ["kontur*", "bot*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
