@@ -43,6 +43,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -53,6 +54,7 @@ from aiohttp import web
 from . import payments
 from .channel import grant_access
 from .content import RAW_PATH, Block, Step, load_steps
+from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
 from .render import PARSE_MODE, rows_for
 from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, build_routes
@@ -64,6 +66,10 @@ logger = logging.getLogger("bot")
 dp = Dispatcher()
 STEPS: list[Step] = []
 ROUTES: dict[tuple[int, int, int], Route] = {}
+
+# Сообщения текущего показанного шага по чатам (message_id) — чтобы стирать их при
+# переходе на следующий шаг и держать чат чистым (видно только актуальный шаг).
+STEP_MESSAGES: dict[int, list[int]] = {}
 
 
 def _cb(step_idx: int, block_idx: int, button_idx: int) -> str:
@@ -114,29 +120,57 @@ def _resolved_url(route: Route | None, chat_id: int | None = None) -> str | None
     return None
 
 
-async def send_block(bot: Bot, chat_id: int, step: Step, block_idx: int, block: Block) -> None:
-    """Отправить один блок шага как отдельное сообщение — дословно, как в BotHelp."""
+async def send_block(bot: Bot, chat_id: int, step: Step, block_idx: int, block: Block) -> int:
+    """Отправить один блок шага как отдельное сообщение — дословно, как в BotHelp.
+
+    Возвращает message_id отправленного сообщения (для авто-удаления при переходе).
+    """
     kb = build_keyboard(step, block_idx, block, chat_id)
     if block.is_text:
-        await bot.send_message(chat_id, block.text, parse_mode=PARSE_MODE, reply_markup=kb)
-        return
+        msg = await bot.send_message(chat_id, block.text, parse_mode=PARSE_MODE, reply_markup=kb)
+        return msg.message_id
+    # Источник файла: ссылка из выгрузки BotHelp либо локальный файл (media.py) —
+    # для вложений, которые BotHelp отдал без ссылки (storageFileId=null, напр. шаг 7).
     link = block.media_link
-    if link and block.media_type == "video_note":
-        await bot.send_video_note(chat_id, URLInputFile(link), reply_markup=kb)
-        return
-    if link:
-        await bot.send_video(chat_id, URLInputFile(link), reply_markup=kb)
-        return
-    # Файла нет в публичной выгрузке (видео-приветствие шага 7) — заглушка, кнопки сохраняем.
-    await bot.send_message(
+    media = URLInputFile(link) if link else None
+    if media is None:
+        local = local_media_path(step.index, block_idx)
+        if local is not None:
+            media = FSInputFile(local)
+    if media is not None:
+        if block.media_type == "video_note":
+            msg = await bot.send_video_note(chat_id, media, reply_markup=kb)
+        else:
+            msg = await bot.send_video(chat_id, media, reply_markup=kb)
+        return msg.message_id
+    # Файла нет ни в выгрузке, ни локально — заглушка, кнопки сохраняем.
+    msg = await bot.send_message(
         chat_id,
         f"〔вложение: {block.media_type} — будет добавлено〕",
         reply_markup=kb,
     )
+    return msg.message_id
 
 
-async def send_step(bot: Bot, chat_id: int, step: Step, header: bool = False) -> None:
-    """Отправить шаг целиком (все блоки по порядку). header=True — для отладочного /all."""
+async def _delete_messages(bot: Bot, chat_id: int, message_ids: list[int]) -> None:
+    """Удалить сообщения чата (best-effort): уже удалённые/старше 48ч/без прав — молча пропускаем."""
+    for mid in message_ids:
+        try:
+            await bot.delete_message(chat_id, mid)
+        except TelegramBadRequest:
+            pass
+
+
+async def send_step(
+    bot: Bot, chat_id: int, step: Step, header: bool = False, track: bool = False
+) -> None:
+    """Отправить шаг целиком (все блоки по порядку).
+
+    header=True — для отладочного /all (заголовок шага).
+    track=True  — навигация по воронке: после показа нового шага стираем сообщения
+                  предыдущего и запоминаем текущие (см. STEP_MESSAGES). Служебные
+                  /all и /step идут с track=False и историю чата не трогают.
+    """
     if header:
         await bot.send_message(chat_id, f"── ШАГ {step.index}: {step.title} ──")
     if step.is_stub:
@@ -145,19 +179,25 @@ async def send_step(bot: Bot, chat_id: int, step: Step, header: bool = False) ->
                 chat_id, f"〔шаг {step.index} «{step.title}» — {step.top_type}: контента нет〕"
             )
         return
+    previous = STEP_MESSAGES.get(chat_id, []) if track else []
+    new_ids: list[int] = []
     for bi, block in enumerate(step.blocks):
         try:
-            await send_block(bot, chat_id, step, bi, block)
+            new_ids.append(await send_block(bot, chat_id, step, bi, block))
         except TelegramBadRequest as e:
             logger.warning("шаг %s блок %s не отправлен: %s", step.index, bi, e)
             await bot.send_message(chat_id, f"〔шаг {step.index} блок {bi}: ошибка отправки〕")
+    if track:
+        # Сначала показали новый шаг, теперь убираем предыдущий — пользователь не видит пустого чата.
+        await _delete_messages(bot, chat_id, previous)
+        STEP_MESSAGES[chat_id] = new_ids
 
 
 # ── Воронка ────────────────────────────────────────────────────────────────
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await send_step(message.bot, message.chat.id, STEPS[ENTRY_STEP])
+    await send_step(message.bot, message.chat.id, STEPS[ENTRY_STEP], track=True)
 
 
 @dp.callback_query(F.data.startswith("go:"))
@@ -173,12 +213,12 @@ async def on_button(call: CallbackQuery) -> None:
     if route is None:
         return
     if route.kind == "step":
-        await send_step(call.bot, call.message.chat.id, STEPS[route.target])
+        await send_step(call.bot, call.message.chat.id, STEPS[route.target], track=True)
     elif route.kind == "pay":
         if SIMULATE_PAYMENT:  # тест без реальной оплаты → страница «Оплата прошла»
             confirm = CONFIRM_STEP_BY_TARIFF.get(route.tariff)
             if confirm is not None:
-                await send_step(call.bot, call.message.chat.id, STEPS[confirm])
+                await send_step(call.bot, call.message.chat.id, STEPS[confirm], track=True)
         else:
             await call.answer(PAYMENT_PLACEHOLDER, show_alert=True)
     elif route.kind == "terminal":
@@ -329,7 +369,7 @@ async def _run() -> None:
         """Подтверждённая оплата: страница «оплачено» + доступ в канал + запись в озеро."""
         confirm = CONFIRM_STEP_BY_TARIFF.get(tariff)
         if confirm is not None:
-            await send_step(bot, tg_id, STEPS[confirm])
+            await send_step(bot, tg_id, STEPS[confirm], track=True)
         await grant_access(bot, tg_id, tariff)
         _record_payment(tariff, data)
 
