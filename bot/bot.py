@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 
 from pathlib import Path
 
@@ -202,6 +203,40 @@ async def cmd_step(message: Message, command: CommandObject) -> None:
     await send_step(message.bot, message.chat.id, STEPS[int(raw)], header=True)
 
 
+class _PinnedResolver:
+    """aiohttp-резолвер: для заданных хостов отдаёт фиксированный IPv4, остальное — как обычно."""
+
+    def __init__(self, pins: dict[str, str]) -> None:
+        from aiohttp.resolver import DefaultResolver
+
+        self._pins = pins
+        self._fallback = DefaultResolver()
+
+    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET):
+        ip = self._pins.get(host)
+        if ip:
+            return [{
+                "hostname": host, "host": ip, "port": port,
+                "family": socket.AF_INET, "proto": socket.IPPROTO_TCP, "flags": 0,
+            }]
+        return await self._fallback.resolve(host, port, family)
+
+    async def close(self) -> None:
+        await self._fallback.close()
+
+
+async def _polling_forever(bot: Bot) -> None:
+    """Поллинг с авто-перезапуском: транзиентный обрыв связи с Telegram (частый на
+    РФ-хостинге) не роняет процесс — ждём и пробуем снова; вебхук Prodamus остаётся жив."""
+    while True:
+        try:
+            await dp.start_polling(bot, handle_signals=False)
+            return
+        except Exception as e:  # noqa: BLE001 — сетевые сбои Telegram не должны валить сервис
+            logger.warning("Поллинг прервался (%s) — перезапуск через 10с", type(e).__name__)
+            await asyncio.sleep(10)
+
+
 def _record_payment(tariff: str, data: dict) -> None:
     """Записать оплату в озеро (best-effort). Идемпотентно по (provider, external_id=order_id).
 
@@ -245,11 +280,14 @@ async def _serve_webhook(on_paid, port: int) -> None:
         await asyncio.sleep(3600)
 
 
-def _make_session() -> AiohttpSession | None:
-    """Сессия для Telegram. Если в окружении задан прокси — ходим через него.
+def _make_session() -> AiohttpSession:
+    """Сессия для Telegram.
 
-    На dev-машине трафик идёт через локальный SOCKS-прокси (как и httpx в проекте);
-    на обычном сервере прокси нет → прямое соединение. Явный приоритет — TELEGRAM_PROXY.
+    • Если в окружении задан прокси (dev-машина: локальный SOCKS) — ходим через него.
+    • Без прокси (сервер) — прямое соединение, но ПРИНУДИТЕЛЬНО по IPv4: на части
+      хостингов (напр. Timeweb) api.telegram.org резолвится в IPv6, а маршрута к IPv6
+      нет → таймаут get_me. Форс IPv4 это чинит, ничего системного не трогая.
+    Явный приоритет прокси — TELEGRAM_PROXY.
     """
     proxy = (
         os.getenv("TELEGRAM_PROXY")
@@ -258,7 +296,16 @@ def _make_session() -> AiohttpSession | None:
         or os.getenv("HTTP_PROXY")
         or ""
     ).strip()
-    return AiohttpSession(proxy=proxy) if proxy else None
+    if proxy:
+        logger.info("Сеть: через прокси.")
+        return AiohttpSession(proxy=proxy)
+    session = AiohttpSession()
+    session._connector_init["family"] = socket.AF_INET  # только IPv4
+    # Пин IPv4 api.telegram.org: на этом хостинге DNS отдаёт IPv6 (без маршрута) и
+    # иногда «дёрганый» IPv4 → фиксируем рабочий адрес, остальное резолвим как обычно.
+    session._connector_init["resolver"] = _PinnedResolver({"api.telegram.org": "149.154.167.220"})
+    logger.info("Сеть: прямое соединение (IPv4, пин api.telegram.org).")
+    return session
 
 
 async def _run() -> None:
@@ -293,9 +340,8 @@ async def _run() -> None:
     else:
         pay_mode = "оплата-заглушка (Prodamus не настроен)"
     logger.info("Воронка готова: %s шагов, %s маршрутов (%s).", len(STEPS), len(ROUTES), pay_mode)
-    logger.info("Сеть: %s.", "через прокси" if session else "прямое соединение")
 
-    tasks = [dp.start_polling(bot)]
+    tasks = [_polling_forever(bot)]
     if payments.PRODAMUS_SECRET:
         port = int(os.getenv("PRODAMUS_WEBHOOK_PORT", "8081"))
         tasks.append(_serve_webhook(on_paid, port))
