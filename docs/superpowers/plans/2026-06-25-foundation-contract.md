@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Schema source of truth is `kontur/models.py`; regenerate `db/schema.sql` via `python -m kontur.cli db schema > db/schema.sql` after model changes. No Alembic.
+- Schema source of truth is `kontur/models.py`; regenerate `db/schema.sql` via `python -m kontur.cli db schema > db/schema.sql` after model changes. **No Alembic** → `Base.metadata.create_all` (`kontur/db.py:67-75`) creates *missing tables only*; it NEVER alters an existing table. So **new tables** (Tasks 1, 3) land automatically on prod, but **any column added to an existing table** (Task 2) needs a **manual `ALTER TABLE` on prod Postgres** (local SQLite is recreated each test, so this only bites prod). Decision: documented ALTER, not Alembic — schema is stable after this foundation; revisit Alembic only if schema churn grows.
 - Portable types only: use `JSONType` (`JSON().with_variant(JSONB(), "postgresql")`) for JSON columns; never dialect-specific `ON CONFLICT`.
 - All writes go through `kontur.db.upsert(session, model, natural_key, values) -> (obj, created)` (select-then-write).
 - `String(500)` is the cap for `content.title`/`content.url` — connectors truncate; not this plan's concern but the column stays 500.
@@ -77,8 +77,9 @@ Expected: FAIL — `ImportError: cannot import name 'ContentMetric'`
 
 ```python
 # kontur/models.py — add after the Content class (after line ~111).
-# Date must be added to the sqlalchemy import block at the top:
-#   from sqlalchemy import (JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func)
+# First add `Date` to the MULTI-LINE sqlalchemy import block (models.py:15-26):
+# insert a line `    Date,` alphabetically between `    Boolean,` (line 17) and
+# `    DateTime,` (line 18). Do NOT collapse the block to one line.
 
 class ContentMetric(Base, TimestampMixin):
     """Снимок метрик контента за один день (тайм-серия). Одна строка на контент/день."""
@@ -167,6 +168,18 @@ python -m kontur.cli db schema > db/schema.sql
 git add kontur/models.py tests/test_content_metric.py db/schema.sql
 git commit -m "feat(lake): content.last_seen_run_id for stale/deleted-content detection"
 ```
+
+- [ ] **Step 6: Prod migration (manual ALTER — `create_all` will NOT add this column)**
+
+This is a column add to the existing `content` table, so `create_all` leaves prod untouched (see Global Constraints). When deploying to the live Postgres, run once and verify:
+
+```sql
+ALTER TABLE content ADD COLUMN last_seen_run_id INTEGER REFERENCES sync_runs(id);
+-- verify:
+-- \d content   → last_seen_run_id present
+```
+
+Local SQLite needs nothing (recreated per test). Record this in the deploy runbook for the VPS. (Tasks 1 & 3 are new tables — no ALTER needed there.)
 
 ---
 
@@ -365,6 +378,7 @@ class Connector(ABC):
         run = SyncRun(connector=self.name, status="running")
         session.add(run)
         session.flush()
+        session.commit()  # фиксируем "running"-строку ДО ingest: переживёт rollback при ошибке
         try:
             self.ingest(session, run, stats)
             run.status = "ok"
@@ -397,10 +411,12 @@ class Connector(ABC):
         return datetime.fromtimestamp(int(unix), tz=timezone.utc)
 ```
 
+> **Why the up-front `session.commit()` (B1, verified):** without it, `run()` only `flush()`es the "running" row; on an `ingest` exception the `session.rollback()` discards that un-committed INSERT, so `session.get(SyncRun, run.id)` returns `None`, the error is never stamped, and `sync_runs` is empty — `test_run_records_error_and_reraises` then errors on `.one()` (`NoResultFound`). The same latent bug exists in `kontur/connectors/bothelp/sync.py:52-54,191-199` (flush-only) but was never caught because `tests/test_sync.py` has no error-path test. BotHelp is dead so we don't fix it there; the new base does it right.
+
 - [ ] **Step 4: Run tests + full suite (base.py is shared)**
 
 Run: `python -m pytest tests/test_base_connector.py -v && python -m pytest`
-Expected: new tests PASS; full suite still green (BotHelp untouched — it imported nothing from the old skeleton).
+Expected: new tests PASS; full suite still green (BotHelp untouched — nothing imports the old skeleton; `git grep` confirms no importers/subclasses/`.sync()` call sites). Baseline before this plan is **106 passed**.
 
 - [ ] **Step 5: Commit**
 
@@ -598,3 +614,8 @@ git commit -m "feat(connectors): single httpx injection point (proxy/transport m
 **Dependencies between tasks:** Tasks 1–3 (models) and 5–6 (helpers) are independent and can be done in any order / parallel. Task 4 depends only on existing `db.upsert` + `models`. None depend on each other's outputs, so this plan is safely parallelizable across subagents (each touches distinct files except `models.py` for Tasks 1–3, which should be serialized or merged carefully).
 
 **Note for execution:** Tasks 1, 2, 3 all edit `kontur/models.py`. Run them sequentially (not in parallel worktrees) or expect a trivial merge in that one file.
+
+**Known low-severity risks (verified, accepted — from plan skeptic review):**
+- The new tests use `make_engine("sqlite://")` (in-memory, `SingletonThreadPool`). This passes under the default single-threaded runner. If the suite ever moves to `pytest -n` (xdist), switch the test `_session()`/`_factory()` helpers to the existing house pattern (`StaticPool` + `connect_args={"check_same_thread": False}`, as in `tests/test_sync.py:45-48`).
+- `ContentMetric.content_id` FK has no `ondelete` — fine because the lake soft-deletes via `last_seen_run_id` and never hard-prunes `content`. Add `ondelete="CASCADE"` only if pruning is introduced.
+- `OAuthToken.expires_at` (`DateTime(timezone=True)`) loses tzinfo on SQLite round-trip; never assert tz-equality of it in a SQLite test (Task 3 test asserts only `access_token`, so it's safe).
