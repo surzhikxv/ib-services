@@ -129,6 +129,24 @@ CREATE TABLE sources (
 	FOREIGN KEY(channel_id) REFERENCES channels (id)
 );
 
+CREATE TABLE content_metric (
+	id SERIAL NOT NULL, 
+	content_id INTEGER NOT NULL, 
+	snapshot_date DATE NOT NULL, 
+	views INTEGER, 
+	reach INTEGER, 
+	likes INTEGER, 
+	comments INTEGER, 
+	shares INTEGER, 
+	saves INTEGER, 
+	raw JSONB, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	UNIQUE (content_id, snapshot_date), 
+	FOREIGN KEY(content_id) REFERENCES content (id)
+);
+
 CREATE TABLE subscribers (
 	id SERIAL NOT NULL, 
 	source_system VARCHAR(50) NOT NULL, 

@@ -10,11 +10,12 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -107,6 +108,24 @@ class Content(Base, TimestampMixin):
     url: Mapped[str | None] = mapped_column(String(500))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metrics: Mapped[dict | None] = mapped_column(JSONType)
+    raw: Mapped[dict | None] = mapped_column(JSONType)
+
+
+class ContentMetric(Base, TimestampMixin):
+    """Снимок метрик контента за один день (тайм-серия). Одна строка на контент/день."""
+
+    __tablename__ = "content_metric"
+    __table_args__ = (UniqueConstraint("content_id", "snapshot_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(ForeignKey("content.id"))
+    snapshot_date: Mapped[date] = mapped_column(Date)
+    views: Mapped[int | None] = mapped_column(Integer)
+    reach: Mapped[int | None] = mapped_column(Integer)
+    likes: Mapped[int | None] = mapped_column(Integer)
+    comments: Mapped[int | None] = mapped_column(Integer)
+    shares: Mapped[int | None] = mapped_column(Integer)
+    saves: Mapped[int | None] = mapped_column(Integer)
     raw: Mapped[dict | None] = mapped_column(JSONType)
 
 
