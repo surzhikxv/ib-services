@@ -266,6 +266,19 @@ class SyncRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
 
 
+class OAuthToken(Base, TimestampMixin):
+    """Хранилище OAuth-токенов коннекторов (refresh должен переживать рестарт процесса)."""
+
+    __tablename__ = "oauth_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    connector: Mapped[str] = mapped_column(String(50), unique=True)
+    access_token: Mapped[str | None] = mapped_column(Text)
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    raw: Mapped[dict | None] = mapped_column(JSONType)
+
+
 # --- Разборы ИИ-аналитика -------------------------------------------------
 
 class AiReport(Base):

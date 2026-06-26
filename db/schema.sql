@@ -35,6 +35,19 @@ CREATE TABLE funnel_stages (
 	UNIQUE (key)
 );
 
+CREATE TABLE oauth_tokens (
+	id SERIAL NOT NULL, 
+	connector VARCHAR(50) NOT NULL, 
+	access_token TEXT, 
+	refresh_token TEXT, 
+	expires_at TIMESTAMP WITH TIME ZONE, 
+	raw JSONB, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	UNIQUE (connector)
+);
+
 CREATE TABLE sync_runs (
 	id SERIAL NOT NULL, 
 	connector VARCHAR(50) NOT NULL, 
