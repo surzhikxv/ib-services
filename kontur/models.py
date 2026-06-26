@@ -109,6 +109,7 @@ class Content(Base, TimestampMixin):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metrics: Mapped[dict | None] = mapped_column(JSONType)
     raw: Mapped[dict | None] = mapped_column(JSONType)
+    last_seen_run_id: Mapped[int | None] = mapped_column(ForeignKey("sync_runs.id"))
 
 
 class ContentMetric(Base, TimestampMixin):

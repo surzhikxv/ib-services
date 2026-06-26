@@ -69,11 +69,13 @@ CREATE TABLE content (
 	published_at TIMESTAMP WITH TIME ZONE, 
 	metrics JSONB, 
 	raw JSONB, 
+	last_seen_run_id INTEGER, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	PRIMARY KEY (id), 
 	UNIQUE (channel_id, external_id), 
-	FOREIGN KEY(channel_id) REFERENCES channels (id)
+	FOREIGN KEY(channel_id) REFERENCES channels (id), 
+	FOREIGN KEY(last_seen_run_id) REFERENCES sync_runs (id)
 );
 
 CREATE TABLE funnel_steps (
