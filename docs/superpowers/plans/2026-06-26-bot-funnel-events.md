@@ -15,9 +15,9 @@
 - Idempotency keys (dedup_key), one per funnel action:
   - bot_start → `tg{tg_id}:bot_start`
   - step_enter → `tg{tg_id}:step:{step_index}`
-  - checkout → `tg{tg_id}:checkout:{tariff}`
   - payment → `tg{tg_id}:payment:{order_id}`
-- Tariff keys are `basic`/`standard`/`premium` (match `Tariff.key` seeds and `bot/payments.py` `TARIFFS`). Stage keys used: `welcome`, `package_info`, `checkout`, `paid` (all seeded in `kontur/db.py` `SEED_STAGES`).
+- **NO separate `checkout` event** (verified design constraint): with Prodamus configured, pay buttons render as URL buttons (`_resolved_url` `bot/bot.py:115-119` → `InlineKeyboardButton(url=...)`), so the click opens the browser and NEVER reaches `on_button` — it is unobservable. The "reached the pay screen" signal is the `step_enter` on a package-info step (2/3/4), which is where the pay button lives, which DOES fire `on_button`, and which carries `tariff_key`. Conversion is the `payment` event. Do not wire a checkout event into the `on_button` pay branch (it would be dead code in production).
+- Tariff keys are `basic`/`standard`/`premium` (match `Tariff.key` seeds and `bot/payments.py` `TARIFFS`). Stage keys used: `welcome`, `package_info`, `paid` (all seeded in `kontur/db.py` `SEED_STAGES`).
 - Bot-side event emission MUST be best-effort: wrapped so any exception (lake down, schema missing) is logged and swallowed — the funnel and the Prodamus webhook response must never be blocked or broken.
 - Tests: `./.venv/bin/python -m pytest`. In-memory SQLite via `create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)` + `init_db(engine)` (seeds stages/tariffs), matching `tests/test_sync.py:43-47`.
 - TDD: failing test first, minimal impl, commit per task. The full suite is currently 120 passed — keep it green.
@@ -36,7 +36,6 @@
   - `record_funnel_event(session_factory=None, *, tg_id, event_type, dedup_key, stage_key=None, tariff_key=None, occurred_at=None, amount=None, currency=None, raw=None) -> None` — upserts the `telegram_bot` Subscriber and one Event in its own committed session. `session_factory=None` → a lazily-built module default from settings.
   - `record_bot_start(tg_id, session_factory=None)`
   - `record_step_enter(tg_id, step_index, *, stage_key=None, tariff_key=None, session_factory=None)`
-  - `record_checkout(tg_id, tariff, session_factory=None)`
   - `record_payment(tg_id, tariff, order_id, *, amount=None, currency=None, raw=None, session_factory=None)`
 - Consumes: `kontur.db.upsert`, `kontur.models.{Event, FunnelStage, Subscriber, Tariff}`.
 
@@ -84,15 +83,15 @@ def test_payment_event_carries_tariff_amount_and_paid_stage():
     assert e.raw == {"x": 1}
 
 
-def test_checkout_and_step_enter_dedup_keys():
+def test_step_enter_dedup_key_and_idempotency():
     sf = _factory()
-    ingest.record_checkout(303, "basic", session_factory=sf)
     ingest.record_step_enter(303, 3, stage_key="package_info", tariff_key="standard", session_factory=sf)
+    ingest.record_step_enter(303, 3, stage_key="package_info", tariff_key="standard", session_factory=sf)  # re-enter → no dup
     s = sf()
-    keys = {e.event_type: e.dedup_key for e in s.scalars(select(Event)).all()}
-    assert keys["checkout"] == "tg303:checkout:basic"
-    assert keys["step_enter"] == "tg303:step:3"
-    assert s.scalar(select(func.count()).select_from(Event)) == 2
+    e = s.scalars(select(Event).where(Event.event_type == "step_enter")).one()
+    assert e.dedup_key == "tg303:step:3"
+    assert e.tariff_id is not None and e.funnel_stage_id is not None  # 'standard' + 'package_info' resolved
+    assert s.scalar(select(func.count()).select_from(Event).where(Event.event_type == "step_enter")) == 1
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -154,6 +153,8 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         tariff_id = None
         if tariff_key:
             tariff_id = session.scalar(select(Tariff.id).where(Tariff.key == tariff_key))
+        # NB: upsert overwrites occurred_at on re-entry → это "последний раз", а не
+        # "первый раз" (низкий приоритет; событие и этап важнее точной метки времени).
         upsert(session, Event,
                {"source_system": SOURCE_SYSTEM, "dedup_key": dedup_key},
                {"subscriber_id": sub.id, "event_type": event_type,
@@ -161,6 +162,9 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
                 "funnel_stage_id": stage_id, "tariff_id": tariff_id,
                 "amount": amount, "currency": currency, "raw": raw})
         session.commit()
+    except Exception:  # noqa: BLE001 — явный rollback, ошибку пробрасываем (вызывающий best-effort)
+        session.rollback()
+        raise
     finally:
         session.close()
 
@@ -175,12 +179,6 @@ def record_step_enter(tg_id: int, step_index: int, *, stage_key: str | None = No
     record_funnel_event(session_factory, tg_id=tg_id, event_type="step_enter",
                         stage_key=stage_key, tariff_key=tariff_key,
                         dedup_key=f"tg{tg_id}:step:{step_index}")
-
-
-def record_checkout(tg_id: int, tariff: str, session_factory: sessionmaker | None = None) -> None:
-    record_funnel_event(session_factory, tg_id=tg_id, event_type="checkout",
-                        stage_key="checkout", tariff_key=tariff,
-                        dedup_key=f"tg{tg_id}:checkout:{tariff}")
 
 
 def record_payment(tg_id: int, tariff: str, order_id: str, *, amount: float | None = None,
@@ -246,15 +244,27 @@ def test_emit_swallows_exceptions_and_runs_in_thread():
 Run: `./.venv/bin/python -m pytest tests/test_bot_events.py -v`
 Expected: FAIL — `AttributeError: module 'bot.bot' has no attribute '_emit'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3a: Extend the routing import (line 60) to add `TARIFF_BY_INFO_STEP`**
 
-Add the import near the other `from .` imports in `bot/bot.py` (after `from .webhook import make_webhook_app`, ~line 61):
+The current import is:
+```python
+from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, build_routes
+```
+Change it to (add `TARIFF_BY_INFO_STEP`, keep alphabetical-ish order):
+```python
+from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, TARIFF_BY_INFO_STEP, build_routes
+```
+Without this, the step-branch wiring below raises `NameError` at runtime on the first button press.
+
+- [ ] **Step 3b: Write minimal implementation**
+
+Add the ingest import near the other `from .` imports in `bot/bot.py` (after `from .webhook import make_webhook_app`, ~line 61):
 
 ```python
 from kontur import ingest
 ```
 
-Add the `_emit` helper next to `_record_payment` (after line ~310):
+Add the `_emit` helper next to `_record_payment` (after line ~310, before `async def _serve_webhook`):
 
 ```python
 async def _emit(fn, *args, **kwargs) -> None:
@@ -282,18 +292,13 @@ In `on_button`, the `route.kind == "step"` branch (after `await send_step(...)`,
         await _emit(ingest.record_step_enter, call.message.chat.id, route.target,
                     stage_key="package_info" if tariff else None, tariff_key=tariff)
 ```
-(Requires `TARIFF_BY_INFO_STEP` in the routing import at line 60 — extend it:
-`from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, TARIFF_BY_INFO_STEP, build_routes`)
+(For package-info steps 2/3/4 this carries the tariff — it IS the "reached the pay screen" signal, since the pay button on those steps renders as a URL button and its click is unobservable. Do NOT add an emit in the `route.kind == "pay"` branch: that branch only runs in dev/placeholder mode and is dead code in production — see Global Constraints.)
 
-In `on_button`, the `route.kind == "pay"` branch (at the top of that branch, before the SIMULATE/placeholder logic, ~line 218):
+In `on_paid` (the nested function inside `_run()`, after `_record_payment(tariff, data)`, ~line 374). Mirror `_record_payment`'s `sum`-then-`amount` fallback:
 ```python
-        await _emit(ingest.record_checkout, call.message.chat.id, route.tariff)
-```
-
-In `on_paid` (after `_record_payment(tariff, data)`, ~line 374):
-```python
+        _amt = data.get("sum") or data.get("amount")
         await _emit(ingest.record_payment, tg_id, tariff, str(data.get("order_id", "")),
-                    amount=float(data["sum"]) if data.get("sum") else None,
+                    amount=float(_amt) if _amt else None,
                     currency=str(data.get("currency", "rub")), raw=data)
 ```
 
@@ -306,7 +311,7 @@ Expected: new test PASSES; full suite green (was 120; +1 ingest file from Task 1
 
 ```bash
 git add bot/bot.py tests/test_bot_events.py
-git commit -m "feat(bot): emit funnel events to lake (best-effort) at start/step/checkout/paid"
+git commit -m "feat(bot): emit funnel events to lake (best-effort) at start/step/paid"
 ```
 
 ---
@@ -315,16 +320,19 @@ git commit -m "feat(bot): emit funnel events to lake (best-effort) at start/step
 
 **Spec coverage (against design spec §6.1):**
 - Direct DB write (not webhook) → Task 1 `kontur/ingest.py`. ✅
-- event_type + dedup_key scheme (bot_start/step_enter/checkout/payment) → Global Constraints + Task 1 wrappers. ✅
+- event_type + dedup_key scheme (bot_start/step_enter/payment) → Global Constraints + Task 1 wrappers. ✅ (No `checkout` event: the pay-button click is unobservable with Prodamus URL buttons — see Global Constraints. `step_enter` on package-info steps is the checkout-intent signal.)
 - Subscriber upsert with `source_system="telegram_bot"` + `tg_user_id` → Task 1 `record_funnel_event`. ✅
 - BotHelp = dead, bot sole source → no BotHelp changes; distinct source_system. ✅
 - Best-effort wrapping (`asyncio.to_thread` + swallow) so funnel/Prodamus never blocked → Task 2 `_emit`. ✅
-- Module-level engine/factory (not per-call) → Task 1 `_default_factory`. ✅ (fixes the per-call `make_engine` smell in the existing `_record_payment`.)
+- Module-level engine/factory (not per-call) for the NEW event path → Task 1 `_default_factory`. ✅ The existing `_record_payment` is left UNTOUCHED and still builds an engine per call — that smell is out of scope here and is NOT fixed by this plan.
 
 **Placeholder scan:** none; all code is concrete.
 
 **Type consistency:** `record_*` signatures in Task 1 match their use in Task 2 wiring (e.g. `record_step_enter(tg_id, step_index, *, stage_key, tariff_key, session_factory)`; the bot passes `stage_key`/`tariff_key` by keyword). `_emit(fn, *args, **kwargs)` matches its test and call-sites.
 
-**Notes for the implementer:**
+**Notes for the implementer (incorporated from the plan skeptic review):**
 - Task 2 edits the LIVE bot. The event calls are ADD-only and best-effort; they must not alter existing funnel/payment control flow. Keep `_record_payment` exactly as-is (it writes the `Payment` row); the new `record_payment` event is additive alongside it.
-- `data.get("sum")` is the Prodamus amount field (see `bot/bot.py:295` which reads `data.get("sum") or data.get("amount")`); use `sum` then fall back is fine, but the plan keeps it to `sum` for the event amount to match the webhook's documented field — the implementer may mirror `_record_payment`'s `data.get("sum") or data.get("amount")` if preferred (note it in the report).
+- The payment-event amount mirrors `_record_payment`'s field handling: `data.get("sum") or data.get("amount")` (some Prodamus payloads use `amount`).
+- Do NOT wire any event into the `on_button` `route.kind == "pay"` branch — verified dead code in production (pay buttons are URL buttons when Prodamus is configured).
+- `occurred_at` is overwritten on event re-entry (upsert semantics) → it is "last seen", not "first seen". Accepted as low-severity; the event's existence + stage carry the funnel signal.
+- Importing `bot.bot` in the Task 2 test is safe: module-level `load_dotenv`/`os.environ.setdefault` are side-effect-free and the token check lives inside `_run()`, not at import (verified). `aiogram`/`aiohttp` are installed in the venv.
