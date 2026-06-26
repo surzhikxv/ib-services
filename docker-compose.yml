@@ -51,6 +51,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-opus-4-8}
       LLM_EFFORT: ${LLM_EFFORT:-medium}
+      # форвард-прокси вне РФ к api.anthropic.com (Hetzner). Пусто = напрямую.
+      LLM_PROXY_URL: ${LLM_PROXY_URL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     # создаём схему+сиды, затем поднимаем API (приём вебхуков)

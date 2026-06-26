@@ -90,7 +90,8 @@ def _make_llm():
     settings = get_settings()
     if not settings.llm_api_key:
         return None
-    return AnthropicLLM(settings.llm_api_key, model=settings.llm_model, effort=settings.llm_effort)
+    return AnthropicLLM(settings.llm_api_key, model=settings.llm_model, effort=settings.llm_effort,
+                        proxy_url=settings.llm_proxy_url or None)
 
 
 def _ai_dry(question: str | None) -> int:

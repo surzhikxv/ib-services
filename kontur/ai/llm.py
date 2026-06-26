@@ -37,16 +37,25 @@ class AnthropicLLM:
     """Claude через SDK Anthropic. Импорт ленивый — пакет нужен только здесь (extra `ai`)."""
 
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL, effort: str = "medium",
-                 max_tokens: int = 4000):
+                 max_tokens: int = 4000, proxy_url: str | None = None):
         self.api_key = api_key
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
+        # Форвард-прокси вне РФ: api.anthropic.com из РФ заблокирован. Соединение —
+        # сквозной TLS (CONNECT), прокси видит только шифротекст. См. LLM_PROXY_URL в .env.
+        self.proxy_url = proxy_url
 
     def complete(self, system: str, user: str) -> str:
         import anthropic  # ленивый импорт
 
-        client = anthropic.Anthropic(api_key=self.api_key)
+        if self.proxy_url:
+            client = anthropic.Anthropic(
+                api_key=self.api_key,
+                http_client=anthropic.DefaultHttpxClient(proxy=self.proxy_url),
+            )
+        else:
+            client = anthropic.Anthropic(api_key=self.api_key)
         # стримим (на случай длинного разбора) и забираем финальное сообщение
         with client.messages.stream(
             model=self.model,
