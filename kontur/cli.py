@@ -67,6 +67,28 @@ def _cmd_bothelp_sync(args) -> int:
     return 0
 
 
+def _cmd_vk_sync(args) -> int:
+    from kontur.connectors.vk.client import VKClient
+    from kontur.connectors.vk.sync import VKConnector
+
+    settings = get_settings()
+    if not settings.vk_group_id or not settings.vk_user_stats_token:
+        print("ERROR: заполни VK_GROUP_ID и VK_USER_STATS_TOKEN в .env", file=sys.stderr)
+        return 2
+
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    with VKClient(
+        settings.vk_user_stats_token,
+        api_base=settings.vk_api_base,
+        version=settings.vk_api_version,
+    ) as client:
+        stats = VKConnector(client, group_id=settings.vk_group_id).run(factory)
+    print("VK sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
 def _cmd_metabase_provision(args) -> int:
     import os
 
@@ -151,6 +173,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     bh = sub.add_parser("bothelp", help="коннектор BotHelp").add_subparsers(dest="action", required=True)
     bh.add_parser("sync", help="выгрузить данные BotHelp в озеро").set_defaults(func=_cmd_bothelp_sync)
+
+    vk = sub.add_parser("vk", help="коннектор ВКонтакте").add_subparsers(dest="action", required=True)
+    vk.add_parser("sync", help="выгрузить посты и метрики VK в озеро").set_defaults(func=_cmd_vk_sync)
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)

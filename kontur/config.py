@@ -43,6 +43,10 @@ class Settings:
     llm_model: str
     llm_effort: str
     llm_proxy_url: str
+    vk_group_id: str
+    vk_user_stats_token: str
+    vk_api_base: str
+    vk_api_version: str
 
 
 def get_settings() -> Settings:
@@ -57,4 +61,8 @@ def get_settings() -> Settings:
         llm_model=os.getenv("LLM_MODEL", "claude-opus-4-8"),
         llm_effort=os.getenv("LLM_EFFORT", "medium"),
         llm_proxy_url=os.getenv("LLM_PROXY_URL", ""),
+        vk_group_id=os.getenv("VK_GROUP_ID", ""),
+        vk_user_stats_token=os.getenv("VK_USER_STATS_TOKEN", ""),
+        vk_api_base=os.getenv("VK_API_BASE", "https://api.vk.com/method"),
+        vk_api_version=os.getenv("VK_API_VERSION", "5.199"),
     )
