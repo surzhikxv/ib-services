@@ -62,7 +62,14 @@ Community-токен по умолчанию **бессрочный**.
    `#access_token=...` (до `&expires_in`). Скопируйте это значение в `VK_USER_STATS_TOKEN`.
 
 > Запасной путь, если возиться с приложением неохота: минт-помощник `https://vkhost.github.io/`
-> (выбрать права `stats` + `offline`). Но своё Standalone-приложение — поддерживаемый путь.
+> → «Настройки» → права `stats` + `offline`. Но своё Standalone-приложение — поддерживаемый путь.
+
+> ⚠️ **«application is blocked» при авторизации?** Значит выбранное приложение заблокировано VK.
+> `client_id=6121396` — это **VK Admin** (отключён 13.04.2026), его vkhost подставляет по умолчанию.
+> Фикс: используйте **Kate Mobile** (`client_id=2685278`) тем же запросом:
+> `https://oauth.vk.com/authorize?client_id=2685278&scope=stats,offline&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token&v=5.199`
+> Если и он заблокирован — заведите **своё** Standalone-приложение (Шаг B выше) и подставьте его
+> `client_id`: своё приложение VK не блокирует.
 
 ---
 
