@@ -144,7 +144,7 @@ CREATE TABLE sources (
 	FOREIGN KEY(channel_id) REFERENCES channels (id)
 );
 
-CREATE TABLE content_metric (
+CREATE TABLE content_metrics (
 	id SERIAL NOT NULL, 
 	content_id INTEGER NOT NULL, 
 	snapshot_date DATE NOT NULL, 

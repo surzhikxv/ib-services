@@ -107,15 +107,21 @@ class Content(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(500))
     url: Mapped[str | None] = mapped_column(String(500))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metrics: Mapped[dict | None] = mapped_column(JSONType)
+    metrics: Mapped[dict | None] = mapped_column(JSONType)  # ПОСЛЕДНИЙ/накопительный снимок — дешёвое чтение; история — в content_metrics
     raw: Mapped[dict | None] = mapped_column(JSONType)
     last_seen_run_id: Mapped[int | None] = mapped_column(ForeignKey("sync_runs.id"))
 
 
 class ContentMetric(Base, TimestampMixin):
-    """Снимок метрик контента за один день (тайм-серия). Одна строка на контент/день."""
+    """Снимок метрик контента за один UTC-день (тайм-серия/история).
 
-    __tablename__ = "content_metric"
+    Одна НЕИЗМЕНЯЕМАЯ строка на контент/UTC-день. Коннекторы пишут ОБА хранилища:
+    - ``content.metrics`` — ПОСЛЕДНИЙ/накопительный снимок (дешёвое чтение);
+    - ``content_metrics`` (эта таблица) — ежедневная история (тайм-серия).
+    ``snapshot_date`` — UTC-календарная дата (не datetime).
+    """
+
+    __tablename__ = "content_metrics"
     __table_args__ = (UniqueConstraint("content_id", "snapshot_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -267,7 +273,11 @@ class SyncRun(Base):
 
 
 class OAuthToken(Base, TimestampMixin):
-    """Хранилище OAuth-токенов коннекторов (refresh должен переживать рестарт процесса)."""
+    """Хранилище OAuth-токенов коннекторов (refresh должен переживать рестарт процесса).
+
+    ВАЖНО: запись токена должна выполняться в ОТДЕЛЬНОЙ сессии с немедленным commit —
+    НЕ внутри транзакции ingest. Используй ``kontur.connectors.oauth.save_token``.
+    """
 
     __tablename__ = "oauth_tokens"
 

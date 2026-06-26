@@ -15,14 +15,14 @@ Postgres.
 
 ## 2026-06-26 — foundation-contract (план `2026-06-25-foundation-contract.md`)
 
-Новые таблицы `content_metric` и `oauth_tokens` создаются `create_all` автоматически —
+Новые таблицы `content_metrics` и `oauth_tokens` создаются `create_all` автоматически —
 ALTER не нужен.
 
 Единственный column-add к существующей таблице:
 
 ```sql
 -- Task 2: content.last_seen_run_id (сигнал устаревшего/удалённого контента)
-ALTER TABLE content ADD COLUMN last_seen_run_id INTEGER REFERENCES sync_runs(id);
+ALTER TABLE content ADD COLUMN IF NOT EXISTS last_seen_run_id INTEGER REFERENCES sync_runs(id);
 -- проверить: \d content  → last_seen_run_id присутствует
 ```
 
