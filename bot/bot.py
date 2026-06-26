@@ -57,8 +57,9 @@ from .content import RAW_PATH, Block, Step, load_steps
 from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
 from .render import PARSE_MODE, rows_for
-from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, build_routes
+from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, TARIFF_BY_INFO_STEP, build_routes
 from .webhook import make_webhook_app
+from kontur import ingest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot")
@@ -198,6 +199,7 @@ async def send_step(
 @dp.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await send_step(message.bot, message.chat.id, STEPS[ENTRY_STEP], track=True)
+    await _emit(ingest.record_bot_start, message.chat.id)
 
 
 @dp.callback_query(F.data.startswith("go:"))
@@ -214,6 +216,9 @@ async def on_button(call: CallbackQuery) -> None:
         return
     if route.kind == "step":
         await send_step(call.bot, call.message.chat.id, STEPS[route.target], track=True)
+        tariff = TARIFF_BY_INFO_STEP.get(route.target)
+        await _emit(ingest.record_step_enter, call.message.chat.id, route.target,
+                    stage_key="package_info" if tariff else None, tariff_key=tariff)
     elif route.kind == "pay":
         if SIMULATE_PAYMENT:  # тест без реальной оплаты → страница «Оплата прошла»
             confirm = CONFIRM_STEP_BY_TARIFF.get(route.tariff)
@@ -310,6 +315,18 @@ def _record_payment(tariff: str, data: dict) -> None:
         logger.exception("Не удалось записать оплату в озеро (тариф=%s) — пропускаю", tariff)
 
 
+async def _emit(fn, *args, **kwargs) -> None:
+    """Записать событие воронки в озеро вне основного потока, best-effort.
+
+    Озеро может быть недоступно/без схемы — это НЕ должно блокировать воронку или
+    ответ вебхуку Prodamus. Любая ошибка логируется и проглатывается.
+    """
+    try:
+        await asyncio.to_thread(fn, *args, **kwargs)
+    except Exception:  # noqa: BLE001 — запись в озеро best-effort
+        logger.exception("Событие воронки не записано в озеро — пропускаю")
+
+
 async def _serve_webhook(on_paid, port: int) -> None:
     """Поднять aiohttp-сервер приёма вебхука Prodamus рядом с поллингом бота."""
     runner = web.AppRunner(make_webhook_app(on_paid))
@@ -372,6 +389,10 @@ async def _run() -> None:
             await send_step(bot, tg_id, STEPS[confirm], track=True)
         await grant_access(bot, tg_id, tariff)
         _record_payment(tariff, data)
+        _amt = data.get("sum") or data.get("amount")
+        await _emit(ingest.record_payment, tg_id, tariff, str(data.get("order_id", "")),
+                    amount=float(_amt) if _amt else None,
+                    currency=str(data.get("currency", "rub")), raw=data)
 
     if payments.configured():
         pay_mode = "Prodamus (ссылка с tg_id + вебхук)"
