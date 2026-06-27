@@ -137,6 +137,32 @@ class ContentMetric(Base, TimestampMixin):
     raw: Mapped[dict | None] = mapped_column(JSONType)
 
 
+class ChannelMetric(Base, TimestampMixin):
+    """Снимок дневных метрик КАНАЛА за один UTC-день (тайм-серия канала).
+
+    Зеркало ``content_metrics`` на уровне площадки: одна строка на канал/UTC-день,
+    повторный прогон за тот же день перезаписывает. Источник для TikTok — нативный
+    Overview-CSV (дневные нетто-дельты: views/profile_views/likes/comments/shares);
+    охваты/подписчики и демография площадки (если есть) — в ``raw``.
+    """
+
+    __tablename__ = "channel_metrics"
+    __table_args__ = (UniqueConstraint("channel_id", "snapshot_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"))
+    snapshot_date: Mapped[date] = mapped_column(Date)
+    followers: Mapped[int | None] = mapped_column(Integer)
+    followers_gained: Mapped[int | None] = mapped_column(Integer)
+    profile_views: Mapped[int | None] = mapped_column(Integer)
+    video_views: Mapped[int | None] = mapped_column(Integer)
+    reach: Mapped[int | None] = mapped_column(Integer)
+    likes: Mapped[int | None] = mapped_column(Integer)
+    comments: Mapped[int | None] = mapped_column(Integer)
+    shares: Mapped[int | None] = mapped_column(Integer)
+    raw: Mapped[dict | None] = mapped_column(JSONType)
+
+
 # --- Тарифы и воронка -----------------------------------------------------
 
 class Tariff(Base, TimestampMixin):

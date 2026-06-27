@@ -72,6 +72,26 @@ CREATE TABLE tariffs (
 	UNIQUE (key)
 );
 
+CREATE TABLE channel_metrics (
+	id SERIAL NOT NULL, 
+	channel_id INTEGER NOT NULL, 
+	snapshot_date DATE NOT NULL, 
+	followers INTEGER, 
+	followers_gained INTEGER, 
+	profile_views INTEGER, 
+	video_views INTEGER, 
+	reach INTEGER, 
+	likes INTEGER, 
+	comments INTEGER, 
+	shares INTEGER, 
+	raw JSONB, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	UNIQUE (channel_id, snapshot_date), 
+	FOREIGN KEY(channel_id) REFERENCES channels (id)
+);
+
 CREATE TABLE content (
 	id SERIAL NOT NULL, 
 	channel_id INTEGER NOT NULL, 

@@ -47,6 +47,7 @@ class Settings:
     vk_user_stats_token: str
     vk_api_base: str
     vk_api_version: str
+    tiktok_ingest_token: str
 
 
 def get_settings() -> Settings:
@@ -65,4 +66,5 @@ def get_settings() -> Settings:
         vk_user_stats_token=os.getenv("VK_USER_STATS_TOKEN", ""),
         vk_api_base=os.getenv("VK_API_BASE", "https://api.vk.com/method"),
         vk_api_version=os.getenv("VK_API_VERSION", "5.199"),
+        tiktok_ingest_token=os.getenv("TIKTOK_INGEST_TOKEN", ""),
     )

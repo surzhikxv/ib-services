@@ -89,6 +89,28 @@ def _cmd_vk_sync(args) -> int:
     return 0
 
 
+def _cmd_tiktok_sync(args) -> int:
+    from pathlib import Path
+
+    from kontur.connectors.tiktok.sync import TikTokConnector
+
+    capture = json.loads(Path(args.capture).read_text(encoding="utf-8")) if args.capture else None
+    overview = Path(args.overview).read_text(encoding="utf-8") if args.overview else None
+    if not capture and not overview:
+        print("ERROR: укажи --capture (JSON userscript'а) и/или --overview (Overview.csv)", file=sys.stderr)
+        return 2
+
+    engine = make_engine(get_settings().database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    stats = TikTokConnector(
+        capture=capture, overview=overview, overview_year=args.year,
+        channel_external_id=args.channel_id, channel_title=args.channel_title,
+    ).run(factory)
+    print("TikTok sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
 def _cmd_metabase_provision(args) -> int:
     import os
 
@@ -176,6 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     vk = sub.add_parser("vk", help="коннектор ВКонтакте").add_subparsers(dest="action", required=True)
     vk.add_parser("sync", help="выгрузить посты и метрики VK в озеро").set_defaults(func=_cmd_vk_sync)
+
+    tt = sub.add_parser("tiktok", help="коннектор TikTok (ингест файлов из браузера)") \
+        .add_subparsers(dest="action", required=True)
+    tts = tt.add_parser("sync", help="залить capture-JSON и/или Overview-CSV в озеро")
+    tts.add_argument("--capture", help="путь к JSON userscript'а (per-video insight)")
+    tts.add_argument("--overview", help="путь к Overview.csv (канал-дневная)")
+    tts.add_argument("--year", type=int, default=None, help="год первой строки Overview (из имени zip)")
+    tts.add_argument("--channel-id", default=None, help="TikTok user_id (режим без capture)")
+    tts.add_argument("--channel-title", default=None, help="название канала (режим без capture)")
+    tts.set_defaults(func=_cmd_tiktok_sync)
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
