@@ -67,25 +67,48 @@
     return _send.apply(this, arguments);
   };
 
-  // --- перечисление видео (DOM ссылок аналитики) + догрузка виртуального списка ---
+  // --- перечисление видео ---
+  // На странице «Публикации» (/tiktokstudio/content) ссылки вида /@user/video/<id>
+  // и /@user/photo/<id>; список ВИРТУАЛИЗИРОВАН (в DOM ~8 строк) → копим при медленной
+  // прокрутке внутреннего контейнера. Запасной путь — ссылки аналитики (сайдбар).
   function collectIds() {
     const ids = new Set();
+    document.querySelectorAll('a[href*="/video/"],a[href*="/photo/"]').forEach((a) => {
+      const m = /\/(?:video|photo)\/(\d{6,})/.exec(a.getAttribute('href') || '');
+      if (m) ids.add(m[1]);
+    });
     document.querySelectorAll('a[href*="/tiktokstudio/analytics/"]').forEach((a) => {
       const m = /\/analytics\/(\d{6,})/.exec(a.getAttribute('href') || '');
       if (m) ids.add(m[1]);
     });
     return [...ids];
   }
+  function bestScrollable() {
+    let cont = document.scrollingElement || document.documentElement, best = 0;
+    document.querySelectorAll('div').forEach((el) => {
+      if (el.scrollHeight > el.clientHeight + 100 && el.clientHeight > 300 && el.scrollHeight > best) { best = el.scrollHeight; cont = el; }
+    });
+    return cont;
+  }
   async function collectIdsScrolling() {
-    let prev = -1, ids = collectIds();
-    for (let i = 0; i < 40 && ids.length !== prev; i++) {
-      prev = ids.length;
-      W.scrollTo(0, document.body.scrollHeight);
-      document.querySelectorAll('[class*="list"],[class*="scroll"]').forEach((e) => (e.scrollTop = e.scrollHeight));
-      await sleep(700);
-      ids = collectIds();
+    const all = new Set(collectIds());
+    const cont = bestScrollable();
+    for (let pass = 0; pass < 2; pass++) {          // два прохода сверху: виртуальный список «теряет» строки на быстрой прокрутке
+      try { cont.scrollTop = 0; } catch (e) {}
+      W.scrollTo(0, 0);
+      await sleep(400);
+      collectIds().forEach((id) => all.add(id));
+      let last = -1, stable = 0;
+      for (let i = 0; i < 80 && stable < 5; i++) {
+        try { cont.scrollBy(0, cont.clientHeight * 0.5); } catch (e) {}
+        W.scrollBy(0, 400);
+        await sleep(260);
+        collectIds().forEach((id) => all.add(id));
+        if (all.size === last) stable++; else stable = 0;
+        last = all.size;
+      }
     }
-    return ids;
+    return [...all];
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
