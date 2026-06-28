@@ -1,6 +1,7 @@
 import httpx
+import pytest
 
-from kontur.connectors.instagram.client import InstagramClient
+from kontur.connectors.instagram.client import InstagramClient, InstagramError
 
 
 def _value_item(name, value):
@@ -61,3 +62,12 @@ def test_account_insights_passes_window():
     assert parsed["reach"]["value"] == 3
     seg, params = next((s, p) for s, p in calls if s == "insights")
     assert params["since"] == "1700000000" and params["metric_type"] == "total_value"
+
+
+def test_insights_reraises_fatal_error():
+    # фатальная ошибка (190 invalid token) НЕ должна маскироваться под "нет данных"
+    def handler(request):
+        return httpx.Response(200, json={"error": {"code": 190, "message": "invalid token"}})
+    c = InstagramClient("tok", transport=httpx.MockTransport(handler), sleep=lambda *_: None)
+    with pytest.raises(InstagramError):
+        c.media_insights("999", "FEED")

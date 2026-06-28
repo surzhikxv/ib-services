@@ -39,6 +39,11 @@ class InstagramClient:
     # коды business-use-case rate limit → короткий бэкофф и повтор
     _RATE_LIMIT_CODES = {4, 17, 32, 613}
 
+    # Только эти коды значат «несовместимая/неизвестная метрика» — их безопасно
+    # перебирать по одной. Авторизация/права/лимиты (190/10/200/102/4/17/32/613)
+    # ДОЛЖНЫ всплывать, а не маскироваться пустым ответом.
+    _FALLBACK_CODES = {1, 100}
+
     def _call(self, path: str, **params) -> dict:
         clean = {k: v for k, v in params.items() if v is not None}
         clean["access_token"] = self._token
@@ -82,18 +87,23 @@ class InstagramClient:
     def _insights(self, path: str, metrics: list[str], **extra) -> dict[str, dict]:
         """Запросить набор метрик с откатом на по-метричный перебор.
 
-        Несовместимая метрика валит весь вызов → пробуем каждую по отдельности,
-        чтобы одна плохая не обнулила прогон. Пустые/ошибочные метрики пропускаем.
+        Несовместимая метрика (код 1/100) валит весь вызов → пробуем каждую по
+        отдельности, чтобы одна плохая не обнулила прогон. Любой другой код
+        (токен/права/лимит) — пробрасываем, иначе мёртвый токен выглядит как «нет данных».
         """
         try:
             body = self._call(path, metric=",".join(metrics), **extra)
             return parse_insights(body.get("data", []))
-        except InstagramError:
+        except InstagramError as e:
+            if e.code not in self._FALLBACK_CODES:
+                raise
             out: dict[str, dict] = {}
             for m in metrics:
                 try:
                     body = self._call(path, metric=m, **extra)
-                except InstagramError:
+                except InstagramError as e2:
+                    if e2.code not in self._FALLBACK_CODES:
+                        raise
                     continue
                 out.update(parse_insights(body.get("data", [])))
             return out
@@ -112,7 +122,7 @@ class InstagramClient:
         """follower_demographics + engaged_audience_demographics по каждому разрезу.
 
         Каждая пара (метрика, breakdown) — отдельный вызов (метрики демографии
-        несовместимы между собой). Возвращает {metric: {breakdown: {dim_value: count}}}.
+        несовместимы между собой). Возвращает {metric: {breakdown: [сырые объекты breakdown из API]}}.
         """
         out: dict = {}
         for metric in DEMOGRAPHIC_METRICS:
@@ -122,7 +132,9 @@ class InstagramClient:
                     body = self._call(f"{ig_user_id}/insights", metric=metric,
                                       period="lifetime", metric_type="total_value",
                                       timeframe=timeframe, breakdown=bd)
-                except InstagramError:
+                except InstagramError as e:
+                    if e.code not in self._FALLBACK_CODES:
+                        raise
                     continue
                 parsed = parse_insights(body.get("data", []))
                 per_breakdown[bd] = (parsed.get(metric) or {}).get("breakdowns") or []
