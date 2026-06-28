@@ -62,7 +62,7 @@ def channel_values(me: dict) -> dict:
     username = me.get("username")
     return {
         "platform": "instagram",
-        "external_id": str(me.get("user_id") or me.get("id")),
+        "external_id": str(uid) if (uid := me.get("user_id") or me.get("id")) else None,
         "title": username,
         "url": f"https://instagram.com/{username}" if username else None,
         "meta": {
@@ -102,7 +102,8 @@ def content_metric_values(insights: dict[str, dict]) -> dict:
 def channel_metric_values(me: dict, insights: dict[str, dict], demographics: dict | None) -> dict:
     typed = _typed(insights, _CHANNEL_TYPED)
     fu = (insights.get("follows_and_unfollows") or {}).get("value")
-    raw = {k: v for k, v in insights.items() if k not in _CHANNEL_TYPED}
+    _account_typed_src = set(_CHANNEL_TYPED) | {"follows_and_unfollows"}
+    raw = {k: v for k, v in insights.items() if k not in _account_typed_src}
     if demographics:
         raw["demographics"] = demographics
     return {

@@ -88,3 +88,4 @@ def test_channel_metric_values_typed_plus_demographics():
     assert cm["video_views"] is None and cm["profile_views"] is None   # not overloaded for IG
     assert cm["raw"]["views"]["value"] == 5000                         # account views → raw
     assert cm["raw"]["demographics"]["follower_demographics"]["country"]["RU"] == 600
+    assert "follows_and_unfollows" not in cm["raw"]   # typed-source metric not duplicated into raw
