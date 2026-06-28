@@ -125,7 +125,6 @@ def _cmd_instagram_sync(args) -> int:
 
 
 def _cmd_instagram_backfill(args) -> int:
-    args.days = args.days
     args.demographics = True
     return _cmd_instagram_sync(args)
 

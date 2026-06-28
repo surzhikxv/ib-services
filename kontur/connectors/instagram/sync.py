@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -57,7 +57,7 @@ def refresh_if_stale(session_factory, client_factory, *, now: datetime,
     return {"refreshed": True, "expires_at": new_exp}
 
 
-def _day_bounds_unix(d, tz: ZoneInfo) -> tuple[int, int]:
+def _day_bounds_unix(d: date, tz: ZoneInfo) -> tuple[int, int]:
     """[начало, конец) календарного дня d в таймзоне аккаунта → unix-границы."""
     start = datetime(d.year, d.month, d.day, tzinfo=tz)
     end = start + timedelta(days=1)

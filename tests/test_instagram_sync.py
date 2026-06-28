@@ -92,3 +92,19 @@ def test_backfill_writes_one_channel_metric_per_day():
     days = sorted(m.snapshot_date for m in s.scalars(select(ChannelMetric)).all())
     assert days == [date(2026, 6, 26), date(2026, 6, 27), date(2026, 6, 28)]
     assert stats["channel_days"] == 3
+
+
+def test_ingest_with_demographics_attaches_to_snap_row_only():
+    demo = {"follower_demographics": [
+        {"dimension_keys": ["country"], "results": [{"dimension_values": ["RU"], "value": 600}]}]}
+    transport, _ = make_transport(me=ME, media_pages=[MEDIA], media_insights={"reach": 1},
+                                  account_insights={"reach": 9}, demographics=demo)
+    factory = _factory()
+    client = InstagramClient("tok", transport=transport, sleep=lambda *_: None)
+    InstagramConnector(client, snapshot_date=SNAP, tz="UTC", backfill_days=2,
+                       with_demographics=True).run(factory)
+    s = factory()
+    rows = {m.snapshot_date: m for m in s.scalars(select(ChannelMetric)).all()}
+    # demographics attached ONLY to the snap-day row
+    assert rows[SNAP].raw["demographics"]["follower_demographics"]          # populated
+    assert "demographics" not in rows[date(2026, 6, 27)].raw                # earlier day: none
