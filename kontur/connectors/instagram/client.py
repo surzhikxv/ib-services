@@ -142,6 +142,13 @@ class InstagramClient:
                 out[metric] = per_breakdown
         return out
 
+    def refresh_token(self) -> dict:
+        """Продлить long-lived токен (Instagram Login: grant_type=ig_refresh_token).
+
+        Возвращает сырой ответ {access_token, token_type, expires_in}. Без client_secret.
+        """
+        return self._call("refresh_access_token", grant_type="ig_refresh_token")
+
     def close(self) -> None:
         self._http.close()
 
