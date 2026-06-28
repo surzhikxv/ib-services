@@ -35,7 +35,18 @@ def make_transport(*, me, media_pages, media_insights=None, account_insights=Non
                 body["paging"] = {"cursors": {"after": str(idx + 1)}}
             return _ok(body)
         if seg == "insights":
-            data = (media_insights or {}).get(params.get("metric"), [])
+            metric = params.get("metric", "")
+            source = account_insights if params.get("metric_type") == "total_value" else media_insights
+            source = source or {}
+            data = []
+            for m in metric.split(","):
+                if m in (demographics or {}):
+                    data.append({"name": m, "period": "lifetime",
+                                 "total_value": {"value": None,
+                                                 "breakdowns": (demographics or {})[m]}})
+                elif m in source:
+                    data.append({"name": m, "period": "day",
+                                 "total_value": {"value": source[m], "breakdowns": []}})
             return _ok({"data": data})
         if seg == "refresh_access_token":
             return _ok({"access_token": "refreshed-token", "token_type": "bearer",
