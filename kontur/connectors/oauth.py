@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from kontur.db import upsert
@@ -26,5 +27,21 @@ def save_token(session_factory: sessionmaker, connector: str, *,
                {"access_token": access_token, "refresh_token": refresh_token,
                 "expires_at": expires_at, "raw": raw})
         session.commit()
+    finally:
+        session.close()
+
+
+def load_token(session_factory: sessionmaker, connector: str) -> OAuthToken | None:
+    """Прочитать сохранённый токен коннектора (или None, если ещё не сохранён)."""
+    from datetime import timezone
+    session = session_factory()
+    try:
+        row = session.scalars(
+            select(OAuthToken).where(OAuthToken.connector == connector)
+        ).first()
+        # Для SQLite: добавляем UTC timezone к наивным DateTime полям
+        if row and row.expires_at and not row.expires_at.tzinfo:
+            row.expires_at = row.expires_at.replace(tzinfo=timezone.utc)
+        return row
     finally:
         session.close()
