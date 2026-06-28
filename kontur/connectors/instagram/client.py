@@ -13,6 +13,9 @@ import time
 from collections.abc import Iterator
 
 from kontur.connectors.http import build_http_client
+from kontur.connectors.instagram.mapping import (
+    ACCOUNT_METRICS, DEMOGRAPHIC_BREAKDOWNS, DEMOGRAPHIC_METRICS, MEDIA_METRICS, parse_insights,
+)
 
 
 class InstagramError(RuntimeError):
@@ -75,6 +78,57 @@ class InstagramClient:
             after = (((body.get("paging") or {}).get("cursors")) or {}).get("after")
             if not after:
                 break
+
+    def _insights(self, path: str, metrics: list[str], **extra) -> dict[str, dict]:
+        """Запросить набор метрик с откатом на по-метричный перебор.
+
+        Несовместимая метрика валит весь вызов → пробуем каждую по отдельности,
+        чтобы одна плохая не обнулила прогон. Пустые/ошибочные метрики пропускаем.
+        """
+        try:
+            body = self._call(path, metric=",".join(metrics), **extra)
+            return parse_insights(body.get("data", []))
+        except InstagramError:
+            out: dict[str, dict] = {}
+            for m in metrics:
+                try:
+                    body = self._call(path, metric=m, **extra)
+                except InstagramError:
+                    continue
+                out.update(parse_insights(body.get("data", [])))
+            return out
+
+    def media_insights(self, media_id: str, product_type: str) -> dict[str, dict]:
+        metrics = MEDIA_METRICS.get(product_type)
+        if not metrics:
+            return {}
+        return self._insights(f"{media_id}/insights", metrics)
+
+    def account_insights(self, ig_user_id: str, *, since: int, until: int) -> dict[str, dict]:
+        return self._insights(f"{ig_user_id}/insights", ACCOUNT_METRICS,
+                              metric_type="total_value", period="day", since=since, until=until)
+
+    def demographics(self, ig_user_id: str, *, timeframe: str = "last_30_days") -> dict:
+        """follower_demographics + engaged_audience_demographics по каждому разрезу.
+
+        Каждая пара (метрика, breakdown) — отдельный вызов (метрики демографии
+        несовместимы между собой). Возвращает {metric: {breakdown: {dim_value: count}}}.
+        """
+        out: dict = {}
+        for metric in DEMOGRAPHIC_METRICS:
+            per_breakdown: dict = {}
+            for bd in DEMOGRAPHIC_BREAKDOWNS:
+                try:
+                    body = self._call(f"{ig_user_id}/insights", metric=metric,
+                                      period="lifetime", metric_type="total_value",
+                                      timeframe=timeframe, breakdown=bd)
+                except InstagramError:
+                    continue
+                parsed = parse_insights(body.get("data", []))
+                per_breakdown[bd] = (parsed.get(metric) or {}).get("breakdowns") or []
+            if per_breakdown:
+                out[metric] = per_breakdown
+        return out
 
     def close(self) -> None:
         self._http.close()
