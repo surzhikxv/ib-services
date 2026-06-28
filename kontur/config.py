@@ -48,6 +48,11 @@ class Settings:
     vk_api_base: str
     vk_api_version: str
     tiktok_ingest_token: str
+    instagram_access_token: str
+    instagram_user_id: str
+    instagram_api_base: str
+    instagram_api_version: str
+    instagram_timezone: str
 
 
 def get_settings() -> Settings:
@@ -67,4 +72,9 @@ def get_settings() -> Settings:
         vk_api_base=os.getenv("VK_API_BASE", "https://api.vk.com/method"),
         vk_api_version=os.getenv("VK_API_VERSION", "5.199"),
         tiktok_ingest_token=os.getenv("TIKTOK_INGEST_TOKEN", ""),
+        instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN", ""),
+        instagram_user_id=os.getenv("INSTAGRAM_USER_ID", ""),
+        instagram_api_base=os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.com"),
+        instagram_api_version=os.getenv("INSTAGRAM_API_VERSION", "v25.0"),
+        instagram_timezone=os.getenv("INSTAGRAM_TIMEZONE", "Europe/Moscow"),
     )
