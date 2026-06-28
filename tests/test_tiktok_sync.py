@@ -8,7 +8,7 @@ from kontur.db import make_engine, make_session_factory
 from kontur.models import (
     Base, Channel, ChannelMetric, Content, ContentMetric, RawRecord, SyncRun,
 )
-from tests.test_tiktok_mapping import AUDIENCE_CALL, OVERVIEW_CALL
+from tests.test_tiktok_mapping import AUDIENCE_CALL, ITEM_LIST_CALL, OVERVIEW_CALL
 
 SNAP = date(2026, 6, 26)
 OVERVIEW_CSV = (
@@ -50,6 +50,27 @@ def test_ingest_writes_channel_content_metrics_and_channel_days():
 
     assert stats == {"channel": 1, "videos": 1, "metrics": 1, "channel_days": 2}
     assert s.scalars(select(SyncRun)).one().status == "ok"
+
+
+def test_ingest_item_list_lands_full_catalog_with_baseline():
+    """capture = insight(777) + item_list(777,888,999): обходом пройдено одно видео,
+    но в озеро попадают все три — у непройденных хотя бы базовые счётчики."""
+    factory = _factory()
+    stats = TikTokConnector(capture=[OVERVIEW_CALL, AUDIENCE_CALL, ITEM_LIST_CALL],
+                            snapshot_date=SNAP).run(factory)
+    s = factory()
+
+    by_ext = {c.external_id: c for c in s.scalars(select(Content)).all()}
+    assert set(by_ext) == {"777", "888", "999"}            # весь каталог
+    assert by_ext["999"].type == "photo"                    # duration 0
+    assert by_ext["888"].url == "https://www.tiktok.com/@lapychevdcp/video/888"  # url добран из канала
+
+    mt = {m.content_id: m for m in s.scalars(select(ContentMetric)).all()}
+    walked = mt[by_ext["777"].id]
+    baseline = mt[by_ext["888"].id]
+    assert walked.reach == 498 and walked.raw["traffic_sources"]["For You"] == 0.843  # богатое
+    assert baseline.views == 81088 and baseline.reach is None and baseline.raw == {}  # только базовое
+    assert stats["videos"] == 3 and stats["metrics"] == 3
 
 
 def test_idempotent_same_day_overwrites():

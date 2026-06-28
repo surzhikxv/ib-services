@@ -78,9 +78,10 @@ class TikTokConnector(Connector):
         stats["channel"] = 1
 
         # 2. Видео → Content + ContentMetric (снимок на дату прогона).
+        unique = (cv.get("meta") or {}).get("unique_id")
         for aid, merged in by_aweme.items():
             self._land_raw(session, "video", str(aid), merged, run)
-            c = content_values(aid, merged)
+            c = content_values(aid, merged, unique=unique)
             content, _ = upsert(
                 session, Content,
                 {"channel_id": channel_id, "external_id": c["external_id"]},

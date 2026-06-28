@@ -61,9 +61,75 @@ AUDIENCE_CALL = {
 }
 
 
+# --- item_list: каталог постов (перечисление + базовые счётчики строками) ----
+# 777 — то же видео, что в insight (богатое перекроет базовое); 888 — без обхода
+# (только базовые счётчики); 999 — фотопост (duration 0 → type photo).
+ITEM_LIST_CALL = {
+    "url": "https://www.tiktok.com/tiktok/creator/manage/item_list/v1/?aid=1988&count=50",
+    "json": {
+        "cursor": 50, "has_more": True, "status_code": 0,
+        "item_list": [
+            {"item_id": "777", "item_type": 1, "desc": "Тест ДЦП", "create_time": "1782216152",
+             "duration": 31347, "play_count": "748", "like_count": "68", "comment_count": "1",
+             "share_count": "3", "favorite_count": "8"},
+            {"item_id": "888", "item_type": 1, "desc": "Видео без обхода", "create_time": "1750950882",
+             "duration": 33967, "play_count": "81088", "like_count": "2997", "comment_count": "129",
+             "share_count": "261", "favorite_count": "251"},
+            {"item_id": "999", "item_type": 1, "desc": "Фотопост", "create_time": "1750000000",
+             "duration": 0, "play_count": "500", "like_count": "10", "comment_count": "0",
+             "share_count": "0", "favorite_count": "2"},
+        ],
+    },
+}
+
+
 def _merged():
     _, by = reader.parse_capture([OVERVIEW_CALL, AUDIENCE_CALL])
     return by["777"]
+
+
+def test_parse_capture_folds_item_list_into_catalog():
+    _, by = reader.parse_capture([OVERVIEW_CALL, AUDIENCE_CALL, ITEM_LIST_CALL])
+    assert set(by) == {"777", "888", "999"}      # перечисление = весь каталог
+    assert "video_info" in by["777"] and "_catalog" in by["777"]  # insight + каталог
+    assert set(by["888"]) == {"_catalog"}        # видео без обхода — только каталог
+
+
+def test_content_values_catalog_only_video():
+    _, by = reader.parse_capture([ITEM_LIST_CALL])
+    c = mapping.content_values("888", by["888"], unique="lapychevdcp")
+    assert c["external_id"] == "888" and c["type"] == "video"
+    assert c["url"] == "https://www.tiktok.com/@lapychevdcp/video/888"
+    assert c["title"] == "Видео без обхода"
+    assert c["published_at"].tzinfo == timezone.utc
+    assert c["raw"]["duration_ms"] == 33967
+    # строковые счётчики каталога приведены к int; reach в каталоге нет
+    assert c["metrics"] == {"views": 81088, "reach": None, "likes": 2997,
+                            "comments": 129, "shares": 261, "saves": 251}
+
+
+def test_content_type_photo_when_duration_zero():
+    _, by = reader.parse_capture([ITEM_LIST_CALL])
+    c = mapping.content_values("999", by["999"], unique="lapychevdcp")
+    assert c["type"] == "photo"
+    assert c["url"] == "https://www.tiktok.com/@lapychevdcp/photo/999"
+
+
+def test_insight_overrides_catalog_for_walked_video():
+    _, by = reader.parse_capture([OVERVIEW_CALL, AUDIENCE_CALL, ITEM_LIST_CALL])
+    c = mapping.content_values("777", by["777"])  # author из insight → unique не нужен
+    assert c["url"] == "https://www.tiktok.com/@lapychevdcp/video/777"
+    assert c["raw"]["duration_ms"] == 31347       # из video.duration, не из каталога
+    assert c["metrics"]["reach"] == 498           # охват только из insight
+    m = mapping.metric_values(by["777"])
+    assert m["raw"]["traffic_sources"] == {"For You": 0.843, "Following": 0.05}
+
+
+def test_metric_values_catalog_only_baseline_no_rich():
+    _, by = reader.parse_capture([ITEM_LIST_CALL])
+    m = mapping.metric_values(by["888"])
+    assert (m["views"], m["likes"], m["saves"]) == (81088, 2997, 251)
+    assert m["reach"] is None and m["raw"] == {}  # богатого нет, только базовые счётчики
 
 
 def test_parse_capture_groups_and_merges_by_aweme():

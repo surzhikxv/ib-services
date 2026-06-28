@@ -1,8 +1,17 @@
 """Чтение файлов, снятых из браузера владельца, в нейтральные структуры.
 
-``parse_capture`` — JSON userscript'а (массив ``[{url, json}]``): склеивает все
-вызовы ``/aweme/v2/data/insight/`` по ``aweme_id`` (разные вкладки шлют разные
-``insigh_type`` в один и тот же endpoint) в единый словарь на видео.
+``parse_capture`` — JSON userscript'а (массив ``[{url, json}]``). Два источника
+в одном буфере:
+- ``/aweme/v2/data/insight/`` — богатая аналитика; склеиваем все вызовы по
+  ``aweme_id`` (разные вкладки шлют разные ``insigh_type`` в один endpoint);
+- ``creator/manage/item_list`` — каталог постов (страницами по ~50 при прокрутке
+  «Публикаций»): на каждый пост даёт базовые счётчики (play/like/comment/share/
+  favorite) + desc/create_time/duration. Это надёжное ПЕРЕЧИСЛЕНИЕ (DOM
+  виртуализирован — из него не вычерпать) + базовые метрики даром.
+
+Оба источника сводятся в один ``by_aweme``: insight кладёт богатые ключи, item_list
+— под ключ ``_catalog``. Так в Content/ContentMetric попадает ВЕСЬ каталог, даже
+видео, которые обход не прошёл (у них будут хотя бы базовые счётчики).
 
 ``parse_overview`` — нативный CSV TikTok Studio. Даты локализованы прописью без
 года («28 апреля») → месяц по словарю RU, год задаётся снаружи (из имени zip),
@@ -41,36 +50,46 @@ def _aweme_ids(url: str) -> list[str]:
 
 
 def parse_capture(entries: list[dict]) -> tuple[dict | None, dict[str, dict]]:
-    """Массив ``[{url, json}]`` → (author | None, ``{aweme_id: merged_insight}``).
+    """Массив ``[{url, json}]`` → (author | None, ``{aweme_id: merged}``).
 
-    Поля c ``null`` в ответе пропускаем — их доберёт другой вызов того же видео.
+    ``merged`` несёт богатые insight-ключи и/или ``_catalog`` (запись из item_list).
+    Поля c ``null`` в insight-ответе пропускаем — их доберёт другой вызов того же видео.
     """
     author: dict | None = None
     by_aweme: dict[str, dict] = {}
+    catalog: dict[str, dict] = {}
     for e in entries or []:
         url = e.get("url", "")
         body = e.get("json")
-        if "/aweme/v2/data/insight" not in url or not isinstance(body, dict):
+        if not isinstance(body, dict):
             continue
-        ids = _aweme_ids(url)
-        if not ids:
+        if "/aweme/v2/data/insight" in url:
+            ids = _aweme_ids(url)
+            if not ids:
+                vi = body.get("video_info")
+                if isinstance(vi, dict) and vi.get("aweme_id"):
+                    ids = [str(vi["aweme_id"])]
+            if not ids:
+                continue
+            for aid in ids:
+                merged = by_aweme.setdefault(str(aid), {})
+                for k, v in body.items():
+                    if k in _SERVICE_KEYS or v is None:
+                        continue
+                    # не затираем уже найденное непустое значение пустым
+                    if k not in merged or merged[k] in (None, {}, []):
+                        merged[k] = v
             vi = body.get("video_info")
-            if isinstance(vi, dict) and vi.get("aweme_id"):
-                ids = [str(vi["aweme_id"])]
-        if not ids:
-            continue
-        for aid in ids:
-            merged = by_aweme.setdefault(str(aid), {})
-            for k, v in body.items():
-                if k in _SERVICE_KEYS or v is None:
-                    continue
-                # не затираем уже найденное непустое значение пустым
-                if k not in merged or merged[k] in (None, {}, []):
-                    merged[k] = v
-        vi = body.get("video_info")
-        if author is None and isinstance(vi, dict) and isinstance(vi.get("author"), dict):
-            if vi["author"].get("uid"):
-                author = vi["author"]
+            if author is None and isinstance(vi, dict) and isinstance(vi.get("author"), dict):
+                if vi["author"].get("uid"):
+                    author = vi["author"]
+        elif "creator/manage/item_list" in url:
+            for it in body.get("item_list") or []:
+                if isinstance(it, dict) and it.get("item_id"):
+                    catalog[str(it["item_id"])] = it  # дедуп: повторные страницы перезапишут тем же
+    # каталог — последним: каждый пост получает запись Content, даже если обход его не прошёл
+    for iid, it in catalog.items():
+        by_aweme.setdefault(iid, {})["_catalog"] = it
     return author, by_aweme
 
 

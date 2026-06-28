@@ -95,41 +95,57 @@ def channel_values(author: dict) -> dict:
     }
 
 
-def content_type(video_info: dict) -> str:
-    """0 → video, иначе photo/карусель (aweme_type)."""
-    return "video" if (video_info or {}).get("aweme_type") == 0 else "photo"
+def content_type(merged: dict) -> str | None:
+    """video / photo. insight: ``aweme_type`` (0 → video). item_list: по длительности
+    (видео имеет duration>0, фото/карусель — 0/нет); ``item_type`` у TikTok зависит
+    от аккаунта (видим 1=видео), поэтому надёжнее опираться на duration."""
+    vi = merged.get("video_info")
+    if isinstance(vi, dict) and vi:
+        return "video" if vi.get("aweme_type") == 0 else "photo"
+    cat = merged.get("_catalog")
+    if isinstance(cat, dict) and cat:
+        return "video" if (_to_int(cat.get("duration")) or 0) > 0 else "photo"
+    return None
 
 
 def _engagement(merged: dict) -> dict:
-    """Базовые счётчики из ``video_info.statistics`` (+ reach из video_uv)."""
+    """Базовые счётчики: insight (``video_info.statistics`` + video_uv) с падением
+    на item_list (``_catalog``, где счётчики приходят строками)."""
     st = (merged.get("video_info") or {}).get("statistics") or {}
+    cat = merged.get("_catalog") or {}
     views = st.get("play_count")
     if views is None:
         views = _scalar(merged.get("realtime_total_video_views"))
+    if views is None:
+        views = _to_int(cat.get("play_count"))
     return {
         "views": views,
-        "reach": _scalar(merged.get("video_uv")),
-        "likes": st.get("digg_count"),
-        "comments": st.get("comment_count"),
-        "shares": st.get("share_count"),
-        "saves": st.get("collect_count"),
+        "reach": _scalar(merged.get("video_uv")),  # охвата в каталоге нет — только insight
+        "likes": st.get("digg_count") if "digg_count" in st else _to_int(cat.get("like_count")),
+        "comments": st.get("comment_count") if "comment_count" in st else _to_int(cat.get("comment_count")),
+        "shares": st.get("share_count") if "share_count" in st else _to_int(cat.get("share_count")),
+        "saves": st.get("collect_count") if "collect_count" in st else _to_int(cat.get("favorite_count")),
     }
 
 
-def content_values(aweme_id: str, merged: dict) -> dict:
-    """Строка контента. ``aweme_id`` берётся из ридера (есть даже без video_info)."""
+def content_values(aweme_id: str, merged: dict, *, unique: str | None = None) -> dict:
+    """Строка контента из insight и/или item_list. ``unique`` — @-хэндл канала
+    (для URL видео, которых обход не прошёл и в их записи нет author)."""
     vi = merged.get("video_info") or {}
-    author = vi.get("author") or {}
-    unique = author.get("unique_id")
-    desc = vi.get("desc")
+    cat = merged.get("_catalog") or {}
+    unique = (vi.get("author") or {}).get("unique_id") or unique
+    desc = vi.get("desc") or cat.get("desc")
+    ctype = content_type(merged)
+    path = "photo" if ctype == "photo" else "video"
+    create = vi.get("create_time") or _to_int(cat.get("create_time"))
     return {
         "external_id": str(aweme_id),
-        "type": content_type(vi) if vi else None,
+        "type": ctype,
         "title": (desc[:500] if desc else None),
-        "url": f"https://www.tiktok.com/@{unique}/video/{aweme_id}" if unique else None,
-        "published_at": _ts(vi.get("create_time")),
+        "url": f"https://www.tiktok.com/@{unique}/{path}/{aweme_id}" if unique else None,
+        "published_at": _ts(create),
         "metrics": _engagement(merged),
-        "raw": {"duration_ms": (vi.get("video") or {}).get("duration")},
+        "raw": {"duration_ms": (vi.get("video") or {}).get("duration") or _to_int(cat.get("duration"))},
     }
 
 
