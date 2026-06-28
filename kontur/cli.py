@@ -89,6 +89,70 @@ def _cmd_vk_sync(args) -> int:
     return 0
 
 
+def _cmd_instagram_sync(args) -> int:
+    from datetime import datetime, timezone
+
+    from kontur.connectors.instagram.client import InstagramClient
+    from kontur.connectors.instagram.sync import (
+        InstagramConnector, refresh_if_stale, resolve_token,
+    )
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    try:
+        token = resolve_token(factory, env_token=settings.instagram_access_token)
+    except RuntimeError as e:
+        print(f"ERROR: {e} (INSTAGRAM_ACCESS_TOKEN)", file=sys.stderr)
+        return 2
+
+    def _cf(tok):
+        return InstagramClient(tok, api_base=settings.instagram_api_base,
+                               version=settings.instagram_api_version)
+
+    refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc))
+    token = resolve_token(factory, env_token=settings.instagram_access_token)
+    with _cf(token) as client:
+        days = getattr(args, "days", None) or 3
+        stats = InstagramConnector(
+            client, ig_user_id=settings.instagram_user_id or None,
+            tz=settings.instagram_timezone, backfill_days=days,
+            with_demographics=getattr(args, "demographics", False),
+        ).run(factory)
+    print("Instagram sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
+def _cmd_instagram_backfill(args) -> int:
+    args.days = args.days
+    args.demographics = True
+    return _cmd_instagram_sync(args)
+
+
+def _cmd_instagram_refresh_token(args) -> int:
+    from datetime import datetime, timezone
+
+    from kontur.connectors.instagram.client import InstagramClient
+    from kontur.connectors.instagram.sync import refresh_if_stale
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+
+    def _cf(tok):
+        return InstagramClient(tok, api_base=settings.instagram_api_base,
+                               version=settings.instagram_api_version)
+
+    out = refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc), threshold_days=999)
+    print("Instagram refresh-token →", json.dumps(
+        {"refreshed": out["refreshed"],
+         "expires_at": out["expires_at"].isoformat() if out["expires_at"] else None},
+        ensure_ascii=False))
+    return 0
+
+
 def _cmd_tiktok_sync(args) -> int:
     from pathlib import Path
 
@@ -208,6 +272,18 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--channel-id", default=None, help="TikTok user_id (режим без capture)")
     tts.add_argument("--channel-title", default=None, help="название канала (режим без capture)")
     tts.set_defaults(func=_cmd_tiktok_sync)
+
+    ig = sub.add_parser("instagram", help="коннектор Instagram (органика, Instagram Login)") \
+        .add_subparsers(dest="action", required=True)
+    igs = ig.add_parser("sync", help="дневная выгрузка постов/Reels + метрик аккаунта")
+    igs.add_argument("--days", type=int, default=3, help="окно дневных метрик аккаунта")
+    igs.add_argument("--demographics", action="store_true", help="снять демографию аудитории")
+    igs.set_defaults(func=_cmd_instagram_sync)
+    igb = ig.add_parser("backfill", help="разовый бэкафилл за N дней (по умолчанию 90) + демография")
+    igb.add_argument("--days", type=int, default=90)
+    igb.set_defaults(func=_cmd_instagram_backfill)
+    ig.add_parser("refresh-token", help="продлить long-lived токен (cron)") \
+        .set_defaults(func=_cmd_instagram_refresh_token)
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
