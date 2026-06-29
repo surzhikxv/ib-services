@@ -1,4 +1,20 @@
-from kontur.connectors.utm import normalize_utm
+from kontur.connectors.utm import normalize_utm, parse_start_payload
+
+
+def test_parse_start_payload_full():
+    assert parse_start_payload("s-ig_m-cpc_c-july") == {
+        "utm_source": "ig", "utm_medium": "cpc", "utm_campaign": "july",
+    }
+
+
+def test_parse_start_payload_keeps_dash_in_value():
+    assert parse_start_payload("c-july-sale") == {"utm_campaign": "july-sale"}
+
+
+def test_parse_start_payload_unparseable_is_empty():
+    assert parse_start_payload("promo2025") == {}
+    assert parse_start_payload("") == {}
+    assert parse_start_payload(None) == {}
 
 
 def test_snake_and_camel_produce_identical_code():
