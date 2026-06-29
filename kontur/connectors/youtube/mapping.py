@@ -110,6 +110,10 @@ _CHANNEL_TYPED = {"views": "video_views", "likes": "likes",
 _CONTENT_TYPED = {"views": "views", "likes": "likes",
                   "comments": "comments", "shares": "shares"}
 
+# Колонки, не попадающие в raw: типизированные + day + источник followers_gained.
+_CHANNEL_CONSUMED = set(_CHANNEL_TYPED) | {"day", "subscribersGained"}
+_CONTENT_CONSUMED = set(_CONTENT_TYPED) | {"day"}
+
 
 def _snapshot_date(row: dict) -> date | None:
     day = row.get("day")
@@ -120,8 +124,7 @@ def channel_metric_rows(report: dict, *, subscriber_count: int | None) -> list[d
     out: list[dict] = []
     for row in rows_to_dicts(report):
         typed = {col: row.get(name) for name, col in _CHANNEL_TYPED.items()}
-        consumed = set(_CHANNEL_TYPED) | {"day"}
-        raw = {k: v for k, v in row.items() if k not in consumed}
+        raw = {k: v for k, v in row.items() if k not in _CHANNEL_CONSUMED}
         out.append({
             "snapshot_date": _snapshot_date(row),
             "followers": subscriber_count,
@@ -141,8 +144,7 @@ def content_metric_rows(report: dict) -> list[dict]:
     out: list[dict] = []
     for row in rows_to_dicts(report):
         typed = {col: row.get(name) for name, col in _CONTENT_TYPED.items()}
-        consumed = set(_CONTENT_TYPED) | {"day"}
-        raw = {k: v for k, v in row.items() if k not in consumed}
+        raw = {k: v for k, v in row.items() if k not in _CONTENT_CONSUMED}
         out.append({
             "snapshot_date": _snapshot_date(row),
             "views": typed["views"],

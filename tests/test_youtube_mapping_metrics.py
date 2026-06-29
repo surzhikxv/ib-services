@@ -29,6 +29,7 @@ def test_channel_metric_rows_typed_and_raw():
     assert r["raw"]["subscribersLost"] == 1
     assert r["raw"]["estimatedMinutesWatched"] == 220
     assert "views" not in r["raw"]
+    assert "subscribersGained" not in r["raw"]   # source of typed followers_gained, not duplicated
 
 
 def test_content_metric_rows_typed_and_raw():
