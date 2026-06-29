@@ -6,7 +6,7 @@ snapshot_date = значение Analytics-`day` (Pacific-день), без ко
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 
 def parse_iso(s: str | None) -> datetime | None:
@@ -95,3 +95,62 @@ def content_values(video: dict) -> dict:
         },
         "raw": video,
     }
+
+
+# Наборы метрик для reports.query (channel-day и video-day).
+CHANNEL_METRICS = ["views", "likes", "comments", "shares",
+                   "subscribersGained", "subscribersLost",
+                   "estimatedMinutesWatched", "averageViewDuration"]
+CONTENT_METRICS = ["views", "likes", "comments", "shares",
+                   "averageViewPercentage", "estimatedMinutesWatched", "averageViewDuration"]
+
+# Типизированные колонки моделей ← имена метрик Analytics.
+_CHANNEL_TYPED = {"views": "video_views", "likes": "likes",
+                  "comments": "comments", "shares": "shares"}
+_CONTENT_TYPED = {"views": "views", "likes": "likes",
+                  "comments": "comments", "shares": "shares"}
+
+
+def _snapshot_date(row: dict) -> date | None:
+    day = row.get("day")
+    return date.fromisoformat(day) if day else None
+
+
+def channel_metric_rows(report: dict, *, subscriber_count: int | None) -> list[dict]:
+    out: list[dict] = []
+    for row in rows_to_dicts(report):
+        typed = {col: row.get(name) for name, col in _CHANNEL_TYPED.items()}
+        consumed = set(_CHANNEL_TYPED) | {"day"}
+        raw = {k: v for k, v in row.items() if k not in consumed}
+        out.append({
+            "snapshot_date": _snapshot_date(row),
+            "followers": subscriber_count,
+            "followers_gained": row.get("subscribersGained"),
+            "profile_views": None,   # у YouTube нет аналога
+            "video_views": typed["video_views"],
+            "reach": None,           # у YouTube нет reach/impressions в API
+            "likes": typed["likes"],
+            "comments": typed["comments"],
+            "shares": typed["shares"],
+            "raw": raw,
+        })
+    return out
+
+
+def content_metric_rows(report: dict) -> list[dict]:
+    out: list[dict] = []
+    for row in rows_to_dicts(report):
+        typed = {col: row.get(name) for name, col in _CONTENT_TYPED.items()}
+        consumed = set(_CONTENT_TYPED) | {"day"}
+        raw = {k: v for k, v in row.items() if k not in consumed}
+        out.append({
+            "snapshot_date": _snapshot_date(row),
+            "views": typed["views"],
+            "reach": None,
+            "likes": typed["likes"],
+            "comments": typed["comments"],
+            "shares": typed["shares"],
+            "saves": None,
+            "raw": raw,
+        })
+    return out
