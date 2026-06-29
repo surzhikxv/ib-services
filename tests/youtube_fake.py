@@ -7,6 +7,8 @@ errors: {segment: {"status": int, "reason": str, "message": str}} — инъек
 """
 from __future__ import annotations
 
+import urllib.parse
+
 import httpx
 
 
@@ -19,6 +21,8 @@ def make_transport(*, channels=None, playlist_pages=None, videos=None, reports=N
     def handler(request: httpx.Request) -> httpx.Response:
         seg = request.url.path.rstrip("/").rsplit("/", 1)[-1]
         params = dict(request.url.params)
+        if request.content:
+            params.update(urllib.parse.parse_qsl(request.content.decode()))
         calls.append((seg, params, dict(request.headers)))
         if seg in errors:
             spec = errors[seg]

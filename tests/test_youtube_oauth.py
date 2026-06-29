@@ -11,6 +11,10 @@ def test_exchange_refresh_token_posts_form_and_parses():
     assert out["expires_in"] == 3599
     seg, params, _ = calls[0]
     assert seg == "token"
+    assert params["grant_type"] == "refresh_token"
+    assert params["client_id"] == "cid"
+    assert params["client_secret"] == "secret"
+    assert params["refresh_token"] == "rtok"
 
 
 def test_proxy_and_transport_mutually_exclusive():
