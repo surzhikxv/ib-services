@@ -125,6 +125,13 @@ class YouTubeClient:
             out.extend(body.get("items") or [])
         return out
 
+    def report(self, *, start_date: str, end_date: str, metrics: list[str],
+               dimensions: str | None = None, filters: str | None = None,
+               sort: str | None = None, ids: str = "channel==MINE") -> dict:
+        return self._analytics("reports", ids=ids, startDate=start_date, endDate=end_date,
+                               metrics=",".join(metrics), dimensions=dimensions,
+                               filters=filters, sort=sort)
+
     def close(self) -> None:
         self._http.close()
 
