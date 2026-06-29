@@ -44,7 +44,8 @@ def _duration_seconds(iso: str | None) -> int | None:
     if not m:
         return None
     h, mi, s = (int(x) if x else 0 for x in m.groups())
-    return h * 3600 + mi * 60 + s
+    total = h * 3600 + mi * 60 + s
+    return total or None
 
 
 def channel_values(ch: dict) -> dict:
@@ -53,7 +54,7 @@ def channel_values(ch: dict) -> dict:
     cid = ch.get("id")
     return {
         "platform": "youtube",
-        "external_id": cid,
+        "external_id": str(cid) if cid else None,
         "title": sn.get("title"),
         "url": f"https://youtube.com/channel/{cid}" if cid else None,
         "meta": {
@@ -82,7 +83,7 @@ def content_values(video: dict) -> dict:
     title = sn.get("title") or ""
     vid = video.get("id")
     return {
-        "external_id": str(vid),
+        "external_id": str(vid) if vid is not None else None,
         "type": "short" if (dur is not None and dur < 60) else "video",
         "title": title[:500] or None,
         "url": f"https://youtube.com/watch?v={vid}" if vid else None,

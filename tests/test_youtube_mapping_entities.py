@@ -49,3 +49,17 @@ def test_content_values_missing_stats_are_none_not_zero():
     c = content_values(v)
     assert c["metrics"] == {"views": None, "likes": None, "comments": None}
     assert c["published_at"] is None
+
+
+def test_content_values_title_truncation_and_empty():
+    long_title = "x" * 600
+    v = {**VIDEO, "snippet": {**VIDEO["snippet"], "title": long_title}}
+    assert len(content_values(v)["title"]) == 500
+    v2 = {**VIDEO, "snippet": {**VIDEO["snippet"], "title": ""}}
+    assert content_values(v2)["title"] is None
+
+
+def test_content_values_zero_or_missing_duration_is_video():
+    assert content_values({**VIDEO, "contentDetails": {"duration": "PT"}})["type"] == "video"
+    assert content_values({**VIDEO, "contentDetails": {"duration": "PT0S"}})["type"] == "video"
+    assert content_values({**VIDEO, "contentDetails": {}})["type"] == "video"
