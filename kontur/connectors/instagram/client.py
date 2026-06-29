@@ -26,13 +26,13 @@ class InstagramError(RuntimeError):
 
 
 class InstagramClient:
-    def __init__(self, token: str, *, transport=None,
+    def __init__(self, token: str, *, transport=None, proxy_url: str | None = None,
                  api_base: str = "https://graph.instagram.com", version: str = "v25.0",
                  timeout: float = 30.0, sleep=time.sleep, max_retries: int = 2):
         self._token = token
         self._api_base = api_base.rstrip("/")
         self._version = version
-        self._http = build_http_client(transport=transport, timeout=timeout)
+        self._http = build_http_client(proxy_url=proxy_url, transport=transport, timeout=timeout)
         self._sleep = sleep
         self._max_retries = max_retries
 

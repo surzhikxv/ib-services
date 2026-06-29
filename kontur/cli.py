@@ -109,7 +109,8 @@ def _cmd_instagram_sync(args) -> int:
 
     def _cf(tok):
         return InstagramClient(tok, api_base=settings.instagram_api_base,
-                               version=settings.instagram_api_version)
+                               version=settings.instagram_api_version,
+                               proxy_url=settings.ig_proxy_url or None)
 
     refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc))
     token = resolve_token(factory, env_token=settings.instagram_access_token)
@@ -142,7 +143,8 @@ def _cmd_instagram_refresh_token(args) -> int:
 
     def _cf(tok):
         return InstagramClient(tok, api_base=settings.instagram_api_base,
-                               version=settings.instagram_api_version)
+                               version=settings.instagram_api_version,
+                               proxy_url=settings.ig_proxy_url or None)
 
     out = refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc), threshold_days=999)
     print("Instagram refresh-token →", json.dumps(
