@@ -53,6 +53,17 @@ class Settings:
     instagram_api_base: str
     instagram_api_version: str
     instagram_timezone: str
+    yt_api_key: str
+    yt_channel_id: str
+    yt_client_id: str
+    yt_client_secret: str
+    yt_refresh_token: str
+    yt_data_base: str
+    yt_analytics_base: str
+    yt_token_uri: str
+    yt_proxy_url: str
+    yt_timezone: str
+    ig_proxy_url: str
 
 
 def get_settings() -> Settings:
@@ -77,4 +88,15 @@ def get_settings() -> Settings:
         instagram_api_base=os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.com"),
         instagram_api_version=os.getenv("INSTAGRAM_API_VERSION", "v25.0"),
         instagram_timezone=os.getenv("INSTAGRAM_TIMEZONE", "Europe/Moscow"),
+        yt_api_key=os.getenv("YT_API_KEY", ""),
+        yt_channel_id=os.getenv("YT_CHANNEL_ID", ""),
+        yt_client_id=os.getenv("YT_CLIENT_ID", ""),
+        yt_client_secret=os.getenv("YT_CLIENT_SECRET", ""),
+        yt_refresh_token=os.getenv("YT_REFRESH_TOKEN", ""),
+        yt_data_base=os.getenv("YT_DATA_BASE", "https://www.googleapis.com/youtube/v3"),
+        yt_analytics_base=os.getenv("YT_ANALYTICS_BASE", "https://youtubeanalytics.googleapis.com/v2"),
+        yt_token_uri=os.getenv("YT_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+        yt_proxy_url=os.getenv("YT_PROXY_URL", ""),
+        yt_timezone=os.getenv("YT_TIMEZONE", "America/Los_Angeles"),
+        ig_proxy_url=os.getenv("IG_PROXY_URL", ""),
     )
