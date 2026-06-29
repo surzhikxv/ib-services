@@ -42,3 +42,32 @@ def test_other_error_raises_generic():
             assert False, "не должно быть quota"
         except YouTubeError as e:
             assert e.status == 400 and e.reason == "badRequest"
+
+
+def test_status_fallback_resource_exhausted_raises_quota():
+    import httpx
+    transport = httpx.MockTransport(
+        lambda r: httpx.Response(403, json={"error": {"code": 403, "status": "RESOURCE_EXHAUSTED"}}))
+    with YouTubeClient(api_key="k", access_token="a", transport=transport, sleep=lambda *_: None) as c:
+        try:
+            c.channel("UCabc")
+            assert False, "expected quota"
+        except YouTubeQuotaExceeded as e:
+            assert e.reason == "RESOURCE_EXHAUSTED"
+
+
+def test_non_json_5xx_retries_then_raises():
+    import httpx
+    calls = {"n": 0}
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(503, text="<html>502 Bad Gateway</html>")
+    transport = httpx.MockTransport(handler)
+    with YouTubeClient(api_key="k", access_token="a", transport=transport,
+                       sleep=lambda *_: None, max_retries=2) as c:
+        try:
+            c.channel("UCabc")
+            assert False, "expected YouTubeError"
+        except YouTubeError as e:
+            assert e.reason == "non-json"
+    assert calls["n"] == 3   # 1 initial + 2 retries

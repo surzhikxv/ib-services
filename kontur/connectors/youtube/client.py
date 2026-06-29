@@ -75,7 +75,14 @@ class YouTubeClient:
         attempt = 0
         while True:
             resp = self._http.get(url, params=clean, headers=headers)
-            body = resp.json()
+            try:
+                body = resp.json()
+            except ValueError:
+                if resp.status_code >= 500 and attempt < self._max_retries:
+                    attempt += 1
+                    self._sleep(0.5 * attempt)
+                    continue
+                raise YouTubeError(resp.status_code, "non-json", (resp.text or "")[:200])
             err = body.get("error") if isinstance(body, dict) else None
             if err:
                 reason = ((err.get("errors") or [{}])[0]).get("reason") or err.get("status")

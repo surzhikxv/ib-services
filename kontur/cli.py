@@ -174,10 +174,15 @@ def _cmd_youtube_sync(args) -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     proxy = settings.yt_proxy_url or None
-    access = ensure_access_token(factory, client_id=settings.yt_client_id,
-                                 client_secret=settings.yt_client_secret,
-                                 now=datetime.now(tz=timezone.utc), proxy_url=proxy,
-                                 token_uri=settings.yt_token_uri)
+    import httpx
+    try:
+        access = ensure_access_token(factory, client_id=settings.yt_client_id,
+                                     client_secret=settings.yt_client_secret,
+                                     now=datetime.now(tz=timezone.utc), proxy_url=proxy,
+                                     token_uri=settings.yt_token_uri)
+    except httpx.HTTPStatusError:
+        print("ERROR: refresh-токен YouTube недействителен или протух — перевыпусти OAuth consent (см. ранбук)", file=sys.stderr)
+        return 2
     days = getattr(args, "days", None) or 4
     with YouTubeClient(api_key=settings.yt_api_key, access_token=access, proxy_url=proxy,
                        data_base=settings.yt_data_base,
@@ -210,11 +215,16 @@ def _cmd_youtube_refresh_token(args) -> int:
     except RuntimeError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    ensure_access_token(factory, client_id=settings.yt_client_id,
-                        client_secret=settings.yt_client_secret,
-                        now=datetime.now(tz=timezone.utc),
-                        proxy_url=settings.yt_proxy_url or None, token_uri=settings.yt_token_uri,
-                        skew_seconds=10**9)   # форсируем обмен (проверка цепочки)
+    import httpx
+    try:
+        ensure_access_token(factory, client_id=settings.yt_client_id,
+                            client_secret=settings.yt_client_secret,
+                            now=datetime.now(tz=timezone.utc),
+                            proxy_url=settings.yt_proxy_url or None, token_uri=settings.yt_token_uri,
+                            skew_seconds=10**9)   # форсируем обмен (проверка цепочки)
+    except httpx.HTTPStatusError:
+        print("ERROR: refresh-токен YouTube недействителен или протух — перевыпусти OAuth consent (см. ранбук)", file=sys.stderr)
+        return 2
     print("YouTube refresh-token OK")
     return 0
 
