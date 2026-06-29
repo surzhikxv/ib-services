@@ -13,12 +13,13 @@ from sqlalchemy.orm import Session
 
 from kontur.connectors.base import Connector
 from kontur.connectors.oauth import load_token, save_token
-from kontur.connectors.youtube.client import TOKEN_URI, exchange_refresh_token
+from kontur.connectors.youtube.client import TOKEN_URI, YouTubeQuotaExceeded, exchange_refresh_token
 from kontur.connectors.youtube.mapping import (
-    CHANNEL_METRICS, channel_metric_rows, channel_values, subscriber_count,
+    CHANNEL_METRICS, CONTENT_METRICS, channel_metric_rows, channel_values,
+    content_metric_rows, content_values, subscriber_count, uploads_playlist_id,
 )
 from kontur.db import upsert
-from kontur.models import Channel, ChannelMetric, SyncRun
+from kontur.models import Channel, ChannelMetric, Content, ContentMetric, SyncRun
 
 
 def resolve_refresh_token(session_factory, *, env_refresh: str) -> str:
@@ -91,3 +92,39 @@ class YouTubeConnector(Connector):
                    {k: v for k, v in row.items() if k != "snapshot_date"})
             stats["channel_days"] += 1
         session.commit()
+
+        # 3. Каталог видео → Content (+ lifetime-снимок), batch-commit.
+        try:
+            video_ids = list(self._client.iter_playlist_items(uploads_playlist_id(ch)))
+            fetched = self._client.videos(video_ids)
+            id_to_pk: dict[str, int] = {}
+            for video in fetched:
+                self._land_raw(session, "video", str(video["id"]), video, run)
+                c = content_values(video)
+                content, _ = upsert(session, Content,
+                                    {"channel_id": channel_id, "external_id": c["external_id"]},
+                                    {"type": c["type"], "title": c["title"], "url": c["url"],
+                                     "published_at": c["published_at"], "metrics": c["metrics"],
+                                     "raw": c["raw"], "last_seen_run_id": run.id})
+                session.flush()
+                id_to_pk[c["external_id"]] = content.id
+                stats["videos"] += 1
+            session.commit()
+
+            # 4. Дневные метрики каждого видео (Analytics), commit на видео.
+            for ext_id, pk in id_to_pk.items():
+                report = self._client.report(start_date=start.isoformat(), end_date=end.isoformat(),
+                                             metrics=CONTENT_METRICS, dimensions="day",
+                                             filters=f"video=={ext_id}", sort="day")
+                for row in content_metric_rows(report):
+                    if row["snapshot_date"] is None:
+                        continue
+                    upsert(session, ContentMetric,
+                           {"content_id": pk, "snapshot_date": row["snapshot_date"]},
+                           {k: v for k, v in row.items() if k != "snapshot_date"})
+                    stats["content_days"] += 1
+                session.commit()
+        except YouTubeQuotaExceeded:
+            session.rollback()           # откатываем недокоммиченный кусок текущего видео
+            stats["quota_exceeded"] = True
+            # уже закоммиченное (канал, дни, каталог) сохранено; добор — завтра
