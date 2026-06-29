@@ -47,3 +47,35 @@ def test_step_enter_dedup_key_and_idempotency():
     assert e.dedup_key == "tg303:step:3"
     assert e.tariff_id is not None and e.funnel_stage_id is not None  # 'standard' + 'package_info' resolved
     assert s.scalar(select(func.count()).select_from(Event).where(Event.event_type == "step_enter")) == 1
+
+
+def test_step_enter_uid_makes_events_append_only():
+    sf = _factory()
+    ingest.record_step_enter(606, 3, uid="cqA", stage_key="package_info",
+                             tariff_key="standard", session_factory=sf)
+    ingest.record_step_enter(606, 3, uid="cqB", stage_key="package_info",
+                             tariff_key="standard", session_factory=sf)
+    ingest.record_step_enter(606, 3, uid="cqA", stage_key="package_info",
+                             tariff_key="standard", session_factory=sf)  # тот же uid → без дубля
+    s = sf()
+    evs = s.scalars(select(Event).where(Event.event_type == "step_enter")).all()
+    assert {e.dedup_key for e in evs} == {"tg606:step:3:cqA", "tg606:step:3:cqB"}
+    assert len(evs) == 2  # два разных uid → две строки; повтор uid идемпотентен
+
+
+def test_bot_start_uid_key():
+    sf = _factory()
+    ingest.record_bot_start(707, uid="m5", session_factory=sf)
+    s = sf()
+    e = s.scalars(select(Event).where(Event.event_type == "bot_start")).one()
+    assert e.dedup_key == "tg707:start:m5" and e.funnel_stage_id is not None
+
+
+def test_record_applied_event():
+    sf = _factory()
+    ingest.record_applied(808, 5, "Подал заявку", uid="cqZ", session_factory=sf)
+    s = sf()
+    e = s.scalars(select(Event).where(Event.event_type == "applied")).one()
+    assert e.dedup_key == "tg808:applied:cqZ"
+    assert e.funnel_stage_id is not None  # 'paid' resolved
+    assert e.raw == {"button": "Подал заявку", "step": 5}

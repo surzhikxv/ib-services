@@ -64,16 +64,26 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         session.close()
 
 
-def record_bot_start(tg_id: int, session_factory: sessionmaker | None = None) -> None:
+def record_bot_start(tg_id: int, *, uid: str | None = None,
+                     session_factory: sessionmaker | None = None) -> None:
+    dedup_key = f"tg{tg_id}:start:{uid}" if uid else f"tg{tg_id}:bot_start"
     record_funnel_event(session_factory, tg_id=tg_id, event_type="bot_start",
-                        stage_key="welcome", dedup_key=f"tg{tg_id}:bot_start")
+                        stage_key="welcome", dedup_key=dedup_key)
 
 
-def record_step_enter(tg_id: int, step_index: int, *, stage_key: str | None = None,
-                      tariff_key: str | None = None, session_factory: sessionmaker | None = None) -> None:
+def record_step_enter(tg_id: int, step_index: int, *, uid: str | None = None,
+                      stage_key: str | None = None, tariff_key: str | None = None,
+                      session_factory: sessionmaker | None = None) -> None:
+    dedup_key = f"tg{tg_id}:step:{step_index}:{uid}" if uid else f"tg{tg_id}:step:{step_index}"
     record_funnel_event(session_factory, tg_id=tg_id, event_type="step_enter",
-                        stage_key=stage_key, tariff_key=tariff_key,
-                        dedup_key=f"tg{tg_id}:step:{step_index}")
+                        stage_key=stage_key, tariff_key=tariff_key, dedup_key=dedup_key)
+
+
+def record_applied(tg_id: int, step_index: int, button_title: str | None, *,
+                   uid: str | None = None, session_factory: sessionmaker | None = None) -> None:
+    record_funnel_event(session_factory, tg_id=tg_id, event_type="applied",
+                        stage_key="paid", dedup_key=f"tg{tg_id}:applied:{uid or 'applied'}",
+                        raw={"button": button_title, "step": step_index})
 
 
 def record_payment(tg_id: int, tariff: str, order_id: str, *, amount: float | None = None,
