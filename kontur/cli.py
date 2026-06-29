@@ -197,6 +197,9 @@ def _cmd_youtube_refresh_token(args) -> int:
     from kontur.connectors.youtube.sync import ensure_access_token, resolve_refresh_token
 
     settings = get_settings()
+    if not (settings.yt_client_id and settings.yt_client_secret):
+        print("ERROR: заполни YT_CLIENT_ID/YT_CLIENT_SECRET в .env", file=sys.stderr)
+        return 2
     engine = make_engine(settings.database_url)
     init_db(engine)
     factory = make_session_factory(engine)
