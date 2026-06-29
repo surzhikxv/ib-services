@@ -25,6 +25,16 @@ from .content import RAW_PATH
 # Шаги с инфо о пакете → ключ тарифа (по нему берём платёжную ссылку и страницу «оплачено»).
 TARIFF_BY_INFO_STEP = {2: "basic", 3: "standard", 4: "premium"}
 
+# Шаги, достижимые кликом через on_button → канонический этап (для ярлыка step_enter).
+# Шаг 0 (приветствие) достижим и через /start (→ bot_start=welcome), и кликом «Назад»
+# со step 7 (→ step_enter) — маппим в welcome, чтобы возврат не давал NULL-этап.
+# Шаги 5/6/8 («оплачено») идут через on_paid без step_enter — их закрывает payment.
+STAGE_BY_STEP = {
+    0: "welcome", 7: "welcome",
+    1: "package_choice",
+    2: "package_info", 3: "package_info", 4: "package_info",
+}
+
 # Куда вести после успешной оплаты (страницы «Оплата прошла»). Пока оплата не подключена,
 # это нужно для будущей привязки платёжного вебхука и для режима симуляции (см. bot/links.py).
 CONFIRM_STEP_BY_TARIFF = {"basic": 6, "standard": 8, "premium": 5}

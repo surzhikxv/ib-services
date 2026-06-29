@@ -57,7 +57,7 @@ from .content import RAW_PATH, Block, Step, load_steps
 from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
 from .render import PARSE_MODE, rows_for
-from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, TARIFF_BY_INFO_STEP, build_routes
+from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, STAGE_BY_STEP, TARIFF_BY_INFO_STEP, build_routes
 from .webhook import make_webhook_app
 from kontur import ingest
 
@@ -197,9 +197,16 @@ async def send_step(
 # ── Воронка ────────────────────────────────────────────────────────────────
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, command: CommandObject) -> None:
     await send_step(message.bot, message.chat.id, STEPS[ENTRY_STEP], track=True)
-    await _emit(ingest.record_bot_start, message.chat.id)
+    u = message.from_user
+    await _emit(
+        ingest.record_bot_start, message.chat.id,
+        uid=f"m{message.message_id}",
+        name=_full_name(u) if u else None,
+        username=u.username if u else None,
+        source_code=(command.args or "").strip() or None,
+    )
 
 
 @dp.callback_query(F.data.startswith("go:"))
@@ -216,9 +223,10 @@ async def on_button(call: CallbackQuery) -> None:
         return
     if route.kind == "step":
         await send_step(call.bot, call.message.chat.id, STEPS[route.target], track=True)
-        tariff = TARIFF_BY_INFO_STEP.get(route.target)
         await _emit(ingest.record_step_enter, call.message.chat.id, route.target,
-                    stage_key="package_info" if tariff else None, tariff_key=tariff)
+                    uid=f"cq{call.id}",
+                    stage_key=STAGE_BY_STEP.get(route.target),
+                    tariff_key=TARIFF_BY_INFO_STEP.get(route.target))
     elif route.kind == "pay":
         if SIMULATE_PAYMENT:  # тест без реальной оплаты → страница «Оплата прошла»
             confirm = CONFIRM_STEP_BY_TARIFF.get(route.tariff)
@@ -227,8 +235,8 @@ async def on_button(call: CallbackQuery) -> None:
         else:
             await call.answer(PAYMENT_PLACEHOLDER, show_alert=True)
     elif route.kind == "terminal":
-        # Ветка завершается служебным шагом без контента — просто подтверждаем нажатие.
-        pass
+        title = _button_title(STEPS, int(si), int(bi), int(ki))
+        await _emit(ingest.record_applied, call.message.chat.id, int(si), title, uid=f"cq{call.id}")
 
 
 # ── Служебные команды сверки контента ───────────────────────────────────────
@@ -325,6 +333,20 @@ async def _emit(fn, *args, **kwargs) -> None:
         await asyncio.to_thread(fn, *args, **kwargs)
     except Exception:  # noqa: BLE001 — запись в озеро best-effort
         logger.exception("Событие воронки не записано в озеро — пропускаю")
+
+
+def _full_name(user) -> str | None:
+    """Имя подписчика из Telegram from_user (имя + фамилия), либо None."""
+    parts = [p for p in (user.first_name, user.last_name) if p]
+    return " ".join(parts).strip() or None
+
+
+def _button_title(steps, si: int, bi: int, ki: int) -> str | None:
+    """Подпись кнопки шага по индексам (для события applied); кривой индекс → None."""
+    try:
+        return steps[si].blocks[bi].buttons[ki].title
+    except (IndexError, AttributeError):
+        return None
 
 
 async def _serve_webhook(on_paid, port: int) -> None:

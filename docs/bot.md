@@ -31,6 +31,29 @@
 стирает их при следующем `send_step(..., track=True)`. Служебные `/all` и `/step` идут с
 `track=False` — историю чата не трогают (это сверка контента, а не воронка).
 
+## Трекинг воронки в озеро (clickstream)
+
+Бот пишет каждый шаг по юзеру в озеро (`events`, `source_system="telegram_bot"`),
+best-effort через `_emit` — недоступность озера не ломает воронку и ответ Prodamus.
+События: `bot_start` (на `/start`), `step_enter` (каждый клик-переход, append-only по
+`callback_query.id`), `applied` («Подал заявку»), `payment` (вебхук Prodamus). Этапы
+проставляются по `routing.STAGE_BY_STEP`; повторы и возвраты «Назад» видны как
+отдельные строки. Платёжная ссылка не трогается — отдельного `checkout` нет (клик по
+URL-кнопке Prodamus боту не виден); сигнал «дошёл до оплаты» = `step_enter` на пакете.
+
+**Атрибуция через deep-link.** Маркетинговые ссылки вида
+`t.me/SamodvijenieBot?start=<payload>` несут источник в `payload` (Telegram разрешает
+`[A-Za-z0-9_-]`, ≤64). Конвенция: пары `ключ-значение` через `_`, ключ от значения —
+первым `-`. Алиасы: `s`=utm_source, `m`=utm_medium, `c`=utm_campaign, `ct`=utm_content,
+`t`=utm_term. Пример: `?start=s-ig_m-cpc_c-july`. Payload без валидных пар (напр.
+`promo2025`) сохраняется в `Source.code` дословно. Источник привязывается к
+`subscriber.source_id` и к событию `bot_start`.
+
+Источник бота пишется как `Source(kind="start_link")`; контент-коннекторы пишут
+`kind="utm"`. Натуральный ключ `sources` — пара `(kind, code)`, поэтому при
+одинаковом `code` это РАЗНЫЕ строки. Склейка «контент → подписчик» в дашборде —
+join по нормализованному `code` (через `normalize_utm`), а не по `source_id`/`kind`.
+
 ## Источник контента
 
 Единственный источник правды — сырьё из BotHelp в `raw/bothelp_raw.json` (публичный
