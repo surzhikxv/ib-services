@@ -152,6 +152,68 @@ def _cmd_instagram_refresh_token(args) -> int:
     return 0
 
 
+def _cmd_youtube_sync(args) -> int:
+    from datetime import datetime, timezone
+
+    from kontur.connectors.youtube.client import YouTubeClient
+    from kontur.connectors.youtube.sync import YouTubeConnector, ensure_access_token, resolve_refresh_token
+
+    settings = get_settings()
+    if not (settings.yt_api_key and settings.yt_channel_id and settings.yt_client_id
+            and settings.yt_client_secret):
+        print("ERROR: заполни YT_API_KEY/YT_CHANNEL_ID/YT_CLIENT_ID/YT_CLIENT_SECRET в .env", file=sys.stderr)
+        return 2
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    try:
+        resolve_refresh_token(factory, env_refresh=settings.yt_refresh_token)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    proxy = settings.yt_proxy_url or None
+    access = ensure_access_token(factory, client_id=settings.yt_client_id,
+                                 client_secret=settings.yt_client_secret,
+                                 now=datetime.now(tz=timezone.utc), proxy_url=proxy,
+                                 token_uri=settings.yt_token_uri)
+    days = getattr(args, "days", None) or 4
+    with YouTubeClient(api_key=settings.yt_api_key, access_token=access, proxy_url=proxy,
+                       data_base=settings.yt_data_base,
+                       analytics_base=settings.yt_analytics_base) as client:
+        stats = YouTubeConnector(client, channel_id=settings.yt_channel_id,
+                                 backfill_days=days).run(factory)
+    print("YouTube sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
+def _cmd_youtube_backfill(args) -> int:
+    args.days = getattr(args, "days", None) or 365
+    return _cmd_youtube_sync(args)
+
+
+def _cmd_youtube_refresh_token(args) -> int:
+    from datetime import datetime, timezone
+
+    from kontur.connectors.youtube.sync import ensure_access_token, resolve_refresh_token
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    try:
+        resolve_refresh_token(factory, env_refresh=settings.yt_refresh_token)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    ensure_access_token(factory, client_id=settings.yt_client_id,
+                        client_secret=settings.yt_client_secret,
+                        now=datetime.now(tz=timezone.utc),
+                        proxy_url=settings.yt_proxy_url or None, token_uri=settings.yt_token_uri,
+                        skew_seconds=10**9)   # форсируем обмен (проверка цепочки)
+    print("YouTube refresh-token OK")
+    return 0
+
+
 def _cmd_tiktok_sync(args) -> int:
     from pathlib import Path
 
@@ -283,6 +345,17 @@ def build_parser() -> argparse.ArgumentParser:
     igb.set_defaults(func=_cmd_instagram_backfill)
     ig.add_parser("refresh-token", help="продлить long-lived токен (cron)") \
         .set_defaults(func=_cmd_instagram_refresh_token)
+
+    yt = sub.add_parser("youtube", help="коннектор YouTube (Data API + Analytics)") \
+        .add_subparsers(dest="action", required=True)
+    yts = yt.add_parser("sync", help="дневная выгрузка видео + метрик канала/видео")
+    yts.add_argument("--days", type=int, default=4, help="трейлинг-окно дневных метрик")
+    yts.set_defaults(func=_cmd_youtube_sync)
+    ytb = yt.add_parser("backfill", help="разовый бэкафилл за N дней (по умолчанию 365)")
+    ytb.add_argument("--days", type=int, default=365)
+    ytb.set_defaults(func=_cmd_youtube_backfill)
+    yt.add_parser("refresh-token", help="проверить/обновить access из refresh (cron)") \
+        .set_defaults(func=_cmd_youtube_refresh_token)
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
