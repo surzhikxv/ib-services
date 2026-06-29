@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.pool import StaticPool
 
 from kontur.db import init_db, make_session_factory
-from kontur.models import Event, Subscriber
+from kontur.models import Event, Source, Subscriber
 from kontur import ingest
 
 
@@ -79,3 +79,41 @@ def test_record_applied_event():
     assert e.dedup_key == "tg808:applied:cqZ"
     assert e.funnel_stage_id is not None  # 'paid' resolved
     assert e.raw == {"button": "Подал заявку", "step": 5}
+
+
+def test_bot_start_attribution_parses_utm_and_links_source():
+    sf = _factory()
+    ingest.record_bot_start(404, uid="m1", source_code="s-ig_c-july", session_factory=sf)
+    s = sf()
+    src = s.scalars(select(Source).where(Source.kind == "start_link")).one()
+    assert src.utm_source == "ig" and src.utm_campaign == "july"
+    assert src.code == "utmCampaign=july|utmSource=ig"  # канонический normalize_utm
+    sub = s.scalars(select(Subscriber).where(Subscriber.external_id == "404")).one()
+    e = s.scalars(select(Event).where(Event.event_type == "bot_start")).one()
+    assert sub.source_id == src.id and e.source_id == src.id
+
+
+def test_bot_start_attribution_verbatim_when_unparseable():
+    sf = _factory()
+    ingest.record_bot_start(405, uid="m1", source_code="promo2025", session_factory=sf)
+    s = sf()
+    src = s.scalars(select(Source).where(Source.kind == "start_link")).one()
+    assert src.code == "promo2025" and src.utm_source is None
+
+
+def test_repeat_start_without_payload_does_not_wipe_source():
+    sf = _factory()
+    ingest.record_bot_start(406, uid="m1", source_code="s-ig", session_factory=sf)
+    ingest.record_bot_start(406, uid="m2", session_factory=sf)  # голый /start
+    s = sf()
+    sub = s.scalars(select(Subscriber).where(Subscriber.external_id == "406")).one()
+    assert sub.source_id is not None  # источник не затёрт
+
+
+def test_bot_start_writes_identity():
+    sf = _factory()
+    ingest.record_bot_start(505, uid="m1", name="Иван П", username="ivanp", session_factory=sf)
+    s = sf()
+    sub = s.scalars(select(Subscriber).where(Subscriber.external_id == "505")).one()
+    assert sub.name == "Иван П" and sub.raw == {"username": "ivanp"}
+    assert sub.last_seen_at is not None

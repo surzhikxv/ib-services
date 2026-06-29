@@ -12,8 +12,9 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
+from kontur.connectors.utm import normalize_utm, parse_start_payload
 from kontur.db import upsert
-from kontur.models import Event, FunnelStage, Subscriber, Tariff
+from kontur.models import Event, FunnelStage, Source, Subscriber, Tariff
 
 SOURCE_SYSTEM = "telegram_bot"
 
@@ -29,18 +30,42 @@ def _default_factory() -> sessionmaker:
     return _FACTORY
 
 
+def _resolve_source(session, payload: str | None) -> int | None:
+    """Upsert Source(kind='start_link') из deep-link payload; вернуть id (или None)."""
+    if not payload:
+        return None
+    parsed = parse_start_payload(payload)
+    code = normalize_utm(parsed) if parsed else payload
+    values = {k: v for k, v in {
+        "utm_source": parsed.get("utm_source"), "utm_medium": parsed.get("utm_medium"),
+        "utm_campaign": parsed.get("utm_campaign"), "utm_content": parsed.get("utm_content"),
+        "utm_term": parsed.get("utm_term"),
+    }.items() if v}
+    src, _ = upsert(session, Source, {"kind": "start_link", "code": code}, values)
+    session.flush()
+    return src.id
+
+
 def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: int,
                         event_type: str, dedup_key: str, stage_key: str | None = None,
                         tariff_key: str | None = None, occurred_at: datetime | None = None,
                         amount: float | None = None, currency: str | None = None,
-                        raw: dict | None = None) -> None:
+                        raw: dict | None = None, name: str | None = None,
+                        username: str | None = None, source_code: str | None = None) -> None:
     """Записать одно событие воронки в озеро (своя сессия, немедленный commit)."""
     sf = session_factory or _default_factory()
     session = sf()
     try:
+        source_id = _resolve_source(session, source_code)
+        sub_values: dict = {"tg_user_id": str(tg_id), "last_seen_at": datetime.now(timezone.utc)}
+        if name:
+            sub_values["name"] = name
+        if username:
+            sub_values["raw"] = {"username": username}
+        if source_id is not None:
+            sub_values["source_id"] = source_id
         sub, _ = upsert(session, Subscriber,
-                        {"source_system": SOURCE_SYSTEM, "external_id": str(tg_id)},
-                        {"tg_user_id": str(tg_id)})
+                        {"source_system": SOURCE_SYSTEM, "external_id": str(tg_id)}, sub_values)
         session.flush()
         stage_id = None
         if stage_key:
@@ -48,13 +73,11 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         tariff_id = None
         if tariff_key:
             tariff_id = session.scalar(select(Tariff.id).where(Tariff.key == tariff_key))
-        # NB: upsert overwrites occurred_at on re-entry → это "последний раз", а не
-        # "первый раз" (низкий приоритет; событие и этап важнее точной метки времени).
         upsert(session, Event,
                {"source_system": SOURCE_SYSTEM, "dedup_key": dedup_key},
                {"subscriber_id": sub.id, "event_type": event_type,
                 "occurred_at": occurred_at or datetime.now(timezone.utc),
-                "funnel_stage_id": stage_id, "tariff_id": tariff_id,
+                "funnel_stage_id": stage_id, "tariff_id": tariff_id, "source_id": source_id,
                 "amount": amount, "currency": currency, "raw": raw})
         session.commit()
     except Exception:  # noqa: BLE001 — явный rollback, ошибку пробрасываем (вызывающий best-effort)
@@ -64,11 +87,13 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         session.close()
 
 
-def record_bot_start(tg_id: int, *, uid: str | None = None,
+def record_bot_start(tg_id: int, *, uid: str | None = None, name: str | None = None,
+                     username: str | None = None, source_code: str | None = None,
                      session_factory: sessionmaker | None = None) -> None:
     dedup_key = f"tg{tg_id}:start:{uid}" if uid else f"tg{tg_id}:bot_start"
     record_funnel_event(session_factory, tg_id=tg_id, event_type="bot_start",
-                        stage_key="welcome", dedup_key=dedup_key)
+                        stage_key="welcome", dedup_key=dedup_key,
+                        name=name, username=username, source_code=source_code)
 
 
 def record_step_enter(tg_id: int, step_index: int, *, uid: str | None = None,
