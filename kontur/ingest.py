@@ -34,7 +34,7 @@ def _resolve_source(session, payload: str | None) -> int | None:
     """Upsert Source(kind='start_link') из deep-link payload; вернуть id (или None)."""
     if not payload:
         return None
-    parsed = parse_start_payload(payload)
+    parsed = parse_start_payload(payload) or {}
     code = normalize_utm(parsed) if parsed else payload
     values = {k: v for k, v in {
         "utm_source": parsed.get("utm_source"), "utm_medium": parsed.get("utm_medium"),
@@ -73,6 +73,8 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         tariff_id = None
         if tariff_key:
             tariff_id = session.scalar(select(Tariff.id).where(Tariff.key == tariff_key))
+        # NB: повторная Telegram-ре-доставка того же uid → upsert перезапишет
+        # occurred_at на "сейчас" (последнее, не первое). Редко и низкий приоритет.
         upsert(session, Event,
                {"source_system": SOURCE_SYSTEM, "dedup_key": dedup_key},
                {"subscriber_id": sub.id, "event_type": event_type,
