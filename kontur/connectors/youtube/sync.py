@@ -81,20 +81,21 @@ class YouTubeConnector(Connector):
         stats["channel"] = 1
         session.commit()      # фиксируем канал ДО дорогих Analytics-вызовов
 
-        # 2. Дневные метрики канала (Analytics dimensions=day).
-        report = self._client.report(start_date=start.isoformat(), end_date=end.isoformat(),
-                                     metrics=CHANNEL_METRICS, dimensions="day", sort="day")
-        for row in channel_metric_rows(report, subscriber_count=subs):
-            if row["snapshot_date"] is None:
-                continue
-            upsert(session, ChannelMetric,
-                   {"channel_id": channel_id, "snapshot_date": row["snapshot_date"]},
-                   {k: v for k, v in row.items() if k != "snapshot_date"})
-            stats["channel_days"] += 1
-        session.commit()
-
-        # 3. Каталог видео → Content (+ lifetime-снимок), batch-commit.
+        # Квота где угодно ПОСЛЕ коммита канала → чистая остановка (run=ok, канал сохранён).
         try:
+            # 2. Дневные метрики канала (Analytics dimensions=day).
+            day_report = self._client.report(start_date=start.isoformat(), end_date=end.isoformat(),
+                                             metrics=CHANNEL_METRICS, dimensions="day", sort="day")
+            for row in channel_metric_rows(day_report, subscriber_count=subs):
+                if row["snapshot_date"] is None:
+                    continue
+                upsert(session, ChannelMetric,
+                       {"channel_id": channel_id, "snapshot_date": row["snapshot_date"]},
+                       {k: v for k, v in row.items() if k != "snapshot_date"})
+                stats["channel_days"] += 1
+            session.commit()
+
+            # 3. Каталог видео → Content (+ lifetime-снимок), batch-commit.
             video_ids = list(self._client.iter_playlist_items(uploads_playlist_id(ch)))
             fetched = self._client.videos(video_ids)
             id_to_pk: dict[str, int] = {}
@@ -113,10 +114,10 @@ class YouTubeConnector(Connector):
 
             # 4. Дневные метрики каждого видео (Analytics), commit на видео.
             for ext_id, pk in id_to_pk.items():
-                report = self._client.report(start_date=start.isoformat(), end_date=end.isoformat(),
-                                             metrics=CONTENT_METRICS, dimensions="day",
-                                             filters=f"video=={ext_id}", sort="day")
-                for row in content_metric_rows(report):
+                video_report = self._client.report(start_date=start.isoformat(), end_date=end.isoformat(),
+                                                   metrics=CONTENT_METRICS, dimensions="day",
+                                                   filters=f"video=={ext_id}", sort="day")
+                for row in content_metric_rows(video_report):
                     if row["snapshot_date"] is None:
                         continue
                     upsert(session, ContentMetric,

@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from kontur.connectors.youtube.sync import YouTubeConnector
 from kontur.db import make_engine, make_session_factory
-from kontur.models import Base, Content, ContentMetric, RawRecord
+from kontur.models import Base, Channel, ChannelMetric, Content, ContentMetric, RawRecord
 from tests.youtube_fake_client import FakeYouTubeClient
 
 CH = {"id": "UCabc", "snippet": {"title": "L"}, "statistics": {"subscriberCount": "10"},
@@ -65,6 +65,21 @@ def test_quota_during_video_metrics_stops_clean_keeps_progress():
     assert s.scalars(select(ContentMetric)).all() == []      # метрик нет, но прогон не упал
 
     # SyncRun помечен ok (частичный), не error
+    from kontur.models import SyncRun
+    run = s.scalars(select(SyncRun)).all()[-1]
+    assert run.status == "ok"
+
+
+def test_quota_during_channel_metrics_keeps_channel_run_ok():
+    f = _factory()
+    client = FakeYouTubeClient(channel=CH, videos=[V1], video_reports={"v1": VR},
+                               quota_on={"channel_report"})
+    stats = YouTubeConnector(client, channel_id="UCabc", snapshot_date=SNAP,
+                             backfill_days=1).run(f)
+    s = f()
+    assert stats["quota_exceeded"] is True
+    assert len(s.scalars(select(Channel)).all()) == 1        # channel committed before the catch
+    assert s.scalars(select(ChannelMetric)).all() == []      # day metrics rolled back
     from kontur.models import SyncRun
     run = s.scalars(select(SyncRun)).all()[-1]
     assert run.status == "ok"

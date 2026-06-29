@@ -37,6 +37,8 @@ class FakeYouTubeClient:
                 raise YouTubeQuotaExceeded(403, "quotaExceeded", "out")
             vid = filters.split("video==", 1)[1]
             return self._video_reports.get(vid, {"columnHeaders": [], "rows": []})
+        if "channel_report" in self._quota_on:
+            raise YouTubeQuotaExceeded(403, "quotaExceeded", "out")
         return self._channel_report
 
     def close(self):
