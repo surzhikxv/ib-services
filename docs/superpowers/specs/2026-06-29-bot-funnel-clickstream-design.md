@@ -71,12 +71,13 @@ deep-link `/start` и базовой личностью подписчика.
 
 ```python
 # Шаги, достижимые кликом через on_button → канонический этап.
-# 0 (приветствие) закрывает bot_start=welcome; 5/6/8 («оплачено») идут через
+# 0 достижим через /start (bot_start=welcome) И кликом «Назад» со step 7 (step_enter) —
+# маппим в welcome, чтобы возврат не давал NULL-этап. 5/6/8 («оплачено») идут через
 # on_paid без step_enter — их закрывает событие payment.
 STAGE_BY_STEP = {
+    0: "welcome", 7: "welcome",
     1: "package_choice",
     2: "package_info", 3: "package_info", 4: "package_info",
-    7: "welcome",
 }
 ```
 
@@ -98,6 +99,10 @@ STAGE_BY_STEP = {
   привязывается к `subscriber.source_id` И к событию `bot_start.source_id`.
 - `source_id` ставится **только когда payload есть** — при «голом» `/start` поле не
   трогаем (не затираем ранее пришедший источник).
+- Источник бота — `kind="start_link"`; контент-коннекторы пишут `kind="utm"`.
+  Натуральный ключ `sources` — `(kind, code)`, поэтому при одинаковом `code` это
+  РАЗНЫЕ строки. Склейка «контент → подписчик» в дашборде — join по нормализованному
+  `code`, не по `source_id`/`kind`.
 
 ## Личность
 
