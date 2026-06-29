@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 
 from kontur.connectors.http import build_http_client
 
@@ -101,6 +102,28 @@ class YouTubeClient:
         if not items:
             raise YouTubeError(None, "notFound", f"канал {channel_id} не найден")
         return items[0]
+
+    def iter_playlist_items(self, playlist_id: str) -> Iterator[str]:
+        page_token = None
+        while True:
+            body = self._data("playlistItems", part="contentDetails",
+                              playlistId=playlist_id, maxResults=50, pageToken=page_token)
+            for item in body.get("items") or []:
+                vid = ((item.get("contentDetails") or {}).get("videoId"))
+                if vid:
+                    yield vid
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+
+    def videos(self, ids: list[str]) -> list[dict]:
+        out: list[dict] = []
+        for i in range(0, len(ids), 50):
+            batch = ids[i:i + 50]
+            body = self._data("videos", part="snippet,statistics,contentDetails",
+                             id=",".join(batch))
+            out.extend(body.get("items") or [])
+        return out
 
     def close(self) -> None:
         self._http.close()
