@@ -136,7 +136,9 @@ def content_values(aweme_id: str, merged: dict, *, unique: str | None = None) ->
     unique = (vi.get("author") or {}).get("unique_id") or unique
     desc = vi.get("desc") or cat.get("desc")
     ctype = content_type(merged)
-    path = "photo" if ctype == "photo" else "video"
+    if merged.get("_is_pinned") and ctype:
+        ctype = "pinned_" + ctype
+    path = "photo" if (ctype or "").endswith("photo") else "video"
     create = vi.get("create_time") or _to_int(cat.get("create_time"))
     return {
         "external_id": str(aweme_id),

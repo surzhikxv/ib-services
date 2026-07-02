@@ -42,12 +42,14 @@ class TikTokConnector(Connector):
         overview_year: int | None = None,
         channel_external_id: str | None = None,
         channel_title: str | None = None,
+        pinned_ids: set[str] | None = None,
         snapshot_date=None,
     ):
         self._capture = capture or []
         self._overview = overview
         self._overview_year = overview_year
         self._channel_external_id = channel_external_id
+        self._pinned_ids = pinned_ids or set()
         self._channel_title = channel_title
         self._snapshot_date = snapshot_date
 
@@ -55,7 +57,7 @@ class TikTokConnector(Connector):
         stats.update(channel=0, videos=0, metrics=0, channel_days=0)
         snap = self._snapshot_date or datetime.now(tz=timezone.utc).date()
 
-        author, by_aweme = parse_capture(self._capture)
+        author, by_aweme = parse_capture(self._capture, pinned_ids=self._pinned_ids)
 
         # 1. Канал — из автора капчи либо из явных параметров.
         if author:

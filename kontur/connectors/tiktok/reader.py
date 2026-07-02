@@ -49,15 +49,26 @@ def _aweme_ids(url: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def parse_capture(entries: list[dict]) -> tuple[dict | None, dict[str, dict]]:
+def _is_pinned_item(it: dict) -> bool:
+    """True если запись из item_list помечена как закреплённая."""
+    return bool(it.get("is_top") or it.get("pin_status") or it.get("pinned"))
+
+
+def parse_capture(
+    entries: list[dict],
+    pinned_ids: set[str] | None = None,
+) -> tuple[dict | None, dict[str, dict]]:
     """Массив ``[{url, json}]`` → (author | None, ``{aweme_id: merged}``).
 
     ``merged`` несёт богатые insight-ключи и/или ``_catalog`` (запись из item_list).
     Поля c ``null`` в insight-ответе пропускаем — их доберёт другой вызов того же видео.
+    ``pinned_ids`` — явный набор id закреплённых постов (из userscript или вызывающего
+    кода); объединяется с авто-детектом по флагам is_top/pin_status/pinned в item_list.
     """
     author: dict | None = None
     by_aweme: dict[str, dict] = {}
     catalog: dict[str, dict] = {}
+    pinned: set[str] = set(pinned_ids or [])
     for e in entries or []:
         url = e.get("url", "")
         body = e.get("json")
@@ -86,10 +97,20 @@ def parse_capture(entries: list[dict]) -> tuple[dict | None, dict[str, dict]]:
         elif "creator/manage/item_list" in url:
             for it in body.get("item_list") or []:
                 if isinstance(it, dict) and it.get("item_id"):
-                    catalog[str(it["item_id"])] = it  # дедуп: повторные страницы перезапишут тем же
+                    iid = str(it["item_id"])
+                    catalog[iid] = it
+                    if _is_pinned_item(it):
+                        pinned.add(iid)
     # каталог — последним: каждый пост получает запись Content, даже если обход его не прошёл
     for iid, it in catalog.items():
-        by_aweme.setdefault(iid, {})["_catalog"] = it
+        merged = by_aweme.setdefault(iid, {})
+        merged["_catalog"] = it
+        if iid in pinned:
+            merged["_is_pinned"] = True
+    # явные pinned_ids могут указывать на видео, прошедшие обход без item_list-записи
+    for iid in pinned:
+        if iid in by_aweme:
+            by_aweme[iid]["_is_pinned"] = True
     return author, by_aweme
 
 

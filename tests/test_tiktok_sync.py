@@ -73,6 +73,20 @@ def test_ingest_item_list_lands_full_catalog_with_baseline():
     assert stats["videos"] == 3 and stats["metrics"] == 3
 
 
+def test_pinned_ids_type_video_without_item_list():
+    """Контракт «точечного обхода закрепа» из userscript: закреп НЕ приходит в
+    item_list (SSR), поэтому в озеро он попадает capture'ом из ОДНОГО insight +
+    явным pinned_ids. Тот же 777 без pinned_ids типизируется как 'video' (см.
+    test_ingest_writes_...), а с pinned_ids — как 'pinned_video'."""
+    factory = _factory()
+    TikTokConnector(capture=[OVERVIEW_CALL, AUDIENCE_CALL], pinned_ids={"777"},
+                    snapshot_date=SNAP).run(factory)
+    s = factory()
+    c = s.scalars(select(Content)).one()
+    assert c.external_id == "777" and c.type == "pinned_video"
+    assert c.metrics["reach"] == 498  # богатые метрики insight сохранены
+
+
 def test_idempotent_same_day_overwrites():
     factory = _factory()
     TikTokConnector(capture=[OVERVIEW_CALL, AUDIENCE_CALL], snapshot_date=SNAP).run(factory)

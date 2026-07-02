@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Контур — TikTok Studio capture & auto-walk (B+)
 // @namespace    kontur.rosta
-// @version      2.2
-// @description  Пассивно собирает богатую per-video аналитику из залогиненного TikTok Studio и (опц.) сам обходит видео человеческим темпом, заливая JSON на ingest коннектора kontur.tiktok. Перечисление — из ответов item_list (не из DOM), страницы ключуются по составу id (cursor у TikTok не уникален). Ничего не форжит — читает ответы, что страница и так грузит.
+// @version      2.3
+// @description  Пассивно собирает богатую per-video аналитику из залогиненного TikTok Studio и (опц.) сам обходит видео человеческим темпом, заливая JSON на ingest коннектора kontur.tiktok. Перечисление — из ответов item_list (не из DOM), страницы ключуются по составу id (cursor у TikTok не уникален). Заливка — ОДНИМ запросом (коннектор сливает item_list+insight по aweme_id; чанкинг рвал merge). Закреп в item_list не приходит (рендерится из SSR) — вводится вручную и обходится точечно. Ничего не форжит — читает ответы, что страница и так грузит.
 // @match        https://www.tiktok.com/tiktokstudio/*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -24,7 +24,14 @@
  и Token (= TIKTOK_INGEST_TOKEN с сервера). Открыть «Публикации» и ОДИН РАЗ
  медленно промотать список до конца (DOM виртуализирован — перечисление берётся из
  ответов item_list, которые подгружаются при прокрутке) → «Сухой прогон» покажет
- число видео → «Старт обход». По концу обхода JSON сам уйдёт на сервер (или «Скачать»).
+ число видео → «Старт обход». По концу обхода JSON сам уйдёт на сервер ОДНИМ запросом
+ (или «Скачать»). При не-200/таймауте буфер сохраняется — можно повторить «Залить».
+
+ ЗАКРЕП: закреплённые посты НЕ приходят в item_list (TikTok рендерит их из SSR-JSON
+ страницы, сетевой хук их не видит) — их не найдёт ни «Сухой прогон», ни обход. Открой
+ закреплённое видео (на профиле бейдж «Закреплено») → возьми ID из URL /video/<id> →
+ впиши в поле «Закреп» (через запятую) → «Закреп ⭯»: точечно обойдёт только их и зальёт
+ как pinned_video. Введённые ID запоминаются и попадают и в полный обход.
 */
 
 (function () {
@@ -32,7 +39,7 @@
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
   // --- персистентное состояние (переживает переходы между страницами) ---
-  const K = { cap: 'k_cap', queue: 'k_queue', mode: 'k_mode', ep: 'k_ep', tok: 'k_tok', hb: 'k_hb' };
+  const K = { cap: 'k_cap', queue: 'k_queue', mode: 'k_mode', ep: 'k_ep', tok: 'k_tok', hb: 'k_hb', pins: 'k_pins' };
   const getJSON = (k, d) => { try { return JSON.parse(GM_getValue(k, '')) ?? d; } catch (e) { return d; } };
   const setJSON = (k, v) => GM_setValue(k, JSON.stringify(v));
 
@@ -63,6 +70,15 @@
     if (isItemList(url)) {
       const ids = (json.item_list || []).map((it) => it && it.item_id).filter(Boolean);
       key = 'itemlist|' + ids.length + '|' + hash(ids.join(','));
+      // детектируем закреплённые посты по флагам is_top / pin_status / pinned
+      const pins = getJSON(K.pins, []);
+      const pinSet = new Set(pins);
+      (json.item_list || []).forEach((it) => {
+        if (it && it.item_id && (it.is_top || it.pin_status || it.pinned)) {
+          pinSet.add(String(it.item_id));
+        }
+      });
+      setJSON(K.pins, [...pinSet]);
     } else {
       key = awemeId(url) + '|' + url.split('?')[0] + '|' + Object.keys(json).sort().join(',');
     }
@@ -112,6 +128,24 @@
     return [...ids];
   }
 
+  // Разбор ручного ввода закрепа: URL/ID → набор aweme_id. Короткие ссылки
+  // (vm/vt.tiktok, /t/) НЕ резолвим — это потребовало бы запроса в TikTok
+  // (нарушает «скрипт не шлёт запросы в TikTok»); помечаем shortlink для подсказки.
+  function parseIds(text) {
+    const ids = new Set();
+    let rejected = 0, shortlink = false;
+    for (let tok of String(text == null ? '' : text).split(/[\s,;]+/)) {
+      tok = tok.trim();
+      if (!tok) continue;
+      const m = /\/(?:video|photo|analytics)\/(\d{6,})/.exec(tok);
+      if (m) { ids.add(m[1]); continue; }
+      if (/^\d{6,}$/.test(tok)) { ids.add(tok); continue; }
+      if (/(?:vm|vt)\.tiktok\.com|\/t\//i.test(tok)) shortlink = true;
+      rejected++;
+    }
+    return { ids: [...ids], rejected, shortlink };
+  }
+
   const rnd = (a, b) => a + Math.floor(Math.random() * (b - a));
   const stepUrl = (s) => 'https://www.tiktok.com/tiktokstudio/analytics/' + s.id + (s.tab ? '/' + s.tab : '');
 
@@ -128,9 +162,7 @@
     GM_setValue(K.mode, 'idle');
     upload(true);
   }
-  function startWalk() {
-    const ids = collectIds();
-    if (!ids.length) { status('Видео не найдены. Открой «Публикации» и промотай список до конца, потом «Сухой прогон».'); return; }
+  function startQueue(ids) {
     const q = [];
     ids.forEach((id) => { q.push({ id, tab: '' }); q.push({ id, tab: 'viewers' }); q.push({ id, tab: 'engagement' }); });
     setJSON(K.queue, q);
@@ -138,23 +170,72 @@
     paint();
     advance();
   }
+  function startWalk() {
+    const ids = new Set(collectIds());
+    // закреп в item_list не приходит (SSR) — добираем известные закреплённые из k_pins
+    getJSON(K.pins, []).forEach((id) => ids.add(String(id)));
+    if (!ids.size) { status('Видео не найдены. Открой «Публикации» и промотай список до конца, потом «Сухой прогон».'); return; }
+    startQueue([...ids]);
+  }
+  // Точечный обход только закреплённых (которых нет в item_list). Введённые ID —
+  // authoritative-набор: перезаписывают k_pins (не копятся), чинит «вечный закреп»
+  // при откреплении. По концу обхода finishWalk зальёт их (typed pinned_video).
+  function walkPins() {
+    const input = el && el.querySelector('#k-pins');
+    const { ids, rejected, shortlink } = parseIds(input ? input.value : '');
+    if (!ids.length) {
+      status(shortlink
+        ? 'Короткие ссылки (vm/vt.tiktok) не поддержаны — открой их и вставь полный /video/<id>.'
+        : 'Вставь ID или ссылки закреплённых: /video/<id> либо сам 18–19-значный ID.');
+      return;
+    }
+    setJSON(K.pins, ids);  // текущий набор закреплённых (перезапись)
+    status('Обход закрепа: ' + ids.length + ' видео' + (rejected ? ` (пропущено битых: ${rejected})` : '') + '...');
+    startQueue(ids);
+  }
 
-  // --- заливка на ingest (cross-origin через GM_xmlhttpRequest) ---
+  // --- заливка на ingest ОДНИМ запросом (cross-origin через GM_xmlhttpRequest) ---
+  // Весь буфер одним POST: коннектор так и задуман — сливает item_list+insight по
+  // одному aweme_id за раз. Чанкинг по 80 рвал этот merge (разные чанки → отдельные
+  // upsert'ы, последний по видео затирал; закреп-типизация и _catalog терялись).
+  // nginx client_max_body_size=50m; типичный буфер ~10 МБ.
   function upload(auto) {
+    // читаем из input напрямую — на случай если onchange не сохранил актуальное значение
+    const epInput = el && el.querySelector('#k-ep');
+    const tokInput = el && el.querySelector('#k-tok');
+    if (epInput && epInput.value.trim()) GM_setValue(K.ep, epInput.value.trim());
+    if (tokInput && tokInput.value.trim()) GM_setValue(K.tok, tokInput.value.trim());
     const ep = GM_getValue(K.ep, ''), tok = GM_getValue(K.tok, '');
     const cap = Object.values(getJSON(K.cap, {}));
     if (!ep || !tok) { if (!auto) status('Впиши Endpoint и Token в плашке.'); return; }
     if (!cap.length) { if (!auto) status('Нечего заливать — сначала собери данные.'); return; }
+    const body = JSON.stringify({ capture: cap, pinned_ids: getJSON(K.pins, []) });
+    const mb = (body.length / 1048576).toFixed(1);
+    if (body.length > 48 * 1048576) {
+      status('Буфер ' + mb + ' МБ > 48 (лимит nginx 50). Жми «Скачать» и залей файлом.'); paint(); return;
+    }
+    status('Заливка ' + cap.length + ' захватов одним запросом (' + mb + ' МБ)...');
     GM_xmlhttpRequest({
       method: 'POST', url: ep,
       headers: { 'Content-Type': 'application/json', 'X-Kontur-Token': tok },
-      data: JSON.stringify({ capture: cap }),
+      data: body,
+      timeout: 120000,
       onload: (r) => {
-        if (r.status === 200) { GM_setValue(K.cap, '{}'); GM_setValue(K.hb, new Date().toISOString()); status('Залито ✓ ' + r.responseText.slice(0, 80)); }
-        else status('Ошибка заливки ' + r.status + ': ' + r.responseText.slice(0, 120));
-        paint();
+        if (r.status === 200) {
+          GM_setValue(K.cap, '{}');
+          GM_setValue(K.hb, new Date().toISOString());
+          let n = '';
+          try { const j = JSON.parse(r.responseText); if (j && j.stats) n = ' видео: ' + j.stats.videos; } catch (e) {}
+          status('Залито ✓' + n);
+          paint();
+        } else {
+          // буфер НЕ чистим — можно повторить «Залить» или «Скачать»
+          status('Ошибка ' + r.status + ': ' + (r.responseText || '').slice(0, 200) + ' — буфер сохранён');
+          paint();
+        }
       },
-      onerror: () => status('Сеть/CORS: заливка не удалась'),
+      onerror: (e) => { status('Сеть ошибка: ' + JSON.stringify(e).slice(0, 150) + ' — буфер сохранён'); paint(); },
+      ontimeout: () => { status('Таймаут (120с) — буфер сохранён, повтори «Залить» или «Скачать»'); paint(); },
     });
   }
   function download() {
@@ -183,10 +264,12 @@
       '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok B+</div>' +
       '<div id="k-n" style="color:#7fd;margin-bottom:6px">—</div>' +
       '<input id="k-ep" placeholder="Endpoint /ingest/tiktok" style="width:100%;margin-bottom:4px;padding:4px;border-radius:5px;border:0">' +
-      '<input id="k-tok" placeholder="Token" style="width:100%;margin-bottom:6px;padding:4px;border-radius:5px;border:0">' +
+      '<input id="k-tok" placeholder="Token" style="width:100%;margin-bottom:4px;padding:4px;border-radius:5px;border:0">' +
+      '<input id="k-pins" placeholder="Закреп: ID/URL через запятую" style="width:100%;margin-bottom:6px;padding:4px;border-radius:5px;border:0">' +
       '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
       '<button id="k-dry" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#555;color:#fff">Сухой прогон</button>' +
       '<button id="k-go" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#2d8cff;color:#fff">Старт обход</button>' +
+      '<button id="k-pinwalk" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#c60;color:#fff">Закреп ⭯</button>' +
       '<button id="k-stop" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#a33;color:#fff">Стоп</button>' +
       '<button id="k-up" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#393;color:#fff">Залить</button>' +
       '<button id="k-dl" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#555;color:#fff">Скачать</button>' +
@@ -194,6 +277,7 @@
     document.body.appendChild(el);
     el.querySelector('#k-ep').value = GM_getValue(K.ep, '');
     el.querySelector('#k-tok').value = GM_getValue(K.tok, '');
+    el.querySelector('#k-pins').value = getJSON(K.pins, []).join(', ');
     el.querySelector('#k-ep').onchange = (e) => GM_setValue(K.ep, e.target.value.trim());
     el.querySelector('#k-tok').onchange = (e) => GM_setValue(K.tok, e.target.value.trim());
     el.querySelector('#k-dry').onclick = () => {
@@ -204,6 +288,7 @@
       paint();
     };
     el.querySelector('#k-go').onclick = startWalk;
+    el.querySelector('#k-pinwalk').onclick = walkPins;
     el.querySelector('#k-stop').onclick = () => { GM_setValue(K.mode, 'idle'); setJSON(K.queue, []); status('Обход остановлен'); paint(); };
     el.querySelector('#k-up').onclick = () => upload(false);
     el.querySelector('#k-dl').onclick = download;

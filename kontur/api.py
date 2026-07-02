@@ -39,6 +39,7 @@ class TikTokIngest(BaseModel):
     year: int | None = None
     channel_id: str | None = None
     channel_title: str | None = None
+    pinned_ids: list[str] | None = None
 
 
 def _check_tiktok_token(token: str | None) -> None:
@@ -56,6 +57,7 @@ def ingest_tiktok(payload: TikTokIngest, x_kontur_token: str | None = Header(def
     stats = TikTokConnector(
         capture=payload.capture, overview=payload.overview, overview_year=payload.year,
         channel_external_id=payload.channel_id, channel_title=payload.channel_title,
+        pinned_ids=set(payload.pinned_ids or []),
     ).run(_session_factory)
     return {"status": "ok", "stats": stats}
 
