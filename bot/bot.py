@@ -410,10 +410,14 @@ async def on_paid_back(call: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == REMINDER_CALLBACK)
 async def on_reminder_tariffs(call: CallbackQuery) -> None:
-    """Open the package-choice screen from any follow-up reminder."""
+    """Open package choice, then remove the reminder that was clicked."""
     target_step = 1
     await call.answer()
     await send_step(call.bot, call.message.chat.id, STEPS[target_step], track=True)
+    try:
+        await call.bot.delete_message(call.message.chat.id, call.message.message_id)
+    except TelegramBadRequest:
+        pass
     await _emit(
         ingest.record_step_enter,
         call.message.chat.id,

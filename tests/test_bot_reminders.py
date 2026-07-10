@@ -173,8 +173,16 @@ def test_reminder_button_opens_tariff_choice_and_records_step(monkeypatch):
     sent = []
     captured = []
     answers = []
+    deleted = []
+    timeline = []
+
+    class FakeBot:
+        async def delete_message(self, chat_id, message_id):
+            timeline.append("delete_reminder")
+            deleted.append((chat_id, message_id))
 
     async def fake_send_step(bot, chat_id, step, **kwargs):
+        timeline.append("send_tariffs")
         sent.append((bot, chat_id, step, kwargs))
 
     async def fake_emit(fn, *args, **kwargs):
@@ -189,8 +197,8 @@ def test_reminder_button_opens_tariff_choice_and_records_step(monkeypatch):
     monkeypatch.setattr(b, "_emit", fake_emit)
     call = SimpleNamespace(
         id="REM1",
-        bot=object(),
-        message=SimpleNamespace(chat=SimpleNamespace(id=401)),
+        bot=FakeBot(),
+        message=SimpleNamespace(chat=SimpleNamespace(id=401), message_id=777),
         answer=fake_answer,
     )
 
@@ -198,6 +206,8 @@ def test_reminder_button_opens_tariff_choice_and_records_step(monkeypatch):
 
     assert answers == [((), {})]
     assert sent == [(call.bot, 401, steps[1], {"track": True})]
+    assert deleted == [(401, 777)]
+    assert timeline == ["send_tariffs", "delete_reminder"]
     assert captured == [(
         ingest.record_step_enter,
         (401, 1),
