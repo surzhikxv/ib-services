@@ -5,13 +5,15 @@ Phase 1: health-check и приём вебхуков (живые события 
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from kontur.config import get_settings
 from kontur.connectors.tiktok.sync import TikTokConnector, tiktok_freshness
 from kontur.db import make_engine, make_session_factory
-from kontur.webhooks import record_webhook
+from kontur.webhooks import record_webhook, webhook_authorized
 
 app = FastAPI(title="Контур роста — API", version="0.1.0")
 
@@ -24,9 +26,23 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/webhooks/{source}")
-async def webhook(source: str, payload: dict) -> dict:
+@app.post("/webhooks/{source}", include_in_schema=False)
+async def webhook(
+    source: str,
+    payload: dict,
+    x_kontur_token: str | None = Header(default=None),
+) -> dict:
     """Приём живого события от источника (bothelp/prodamus/...) в сырое озеро."""
+    expected = os.getenv("WEBHOOK_INGEST_TOKEN", "")
+    allowed = os.getenv("WEBHOOK_ALLOWED_SOURCES", "bothelp")
+    if not webhook_authorized(
+        source,
+        x_kontur_token,
+        expected_token=expected,
+        allowed_sources=allowed,
+    ):
+        # Не раскрываем, какие источники разрешены и включён ли endpoint.
+        raise HTTPException(status_code=404, detail="not found")
     external_id = record_webhook(_session_factory, source, payload)
     return {"status": "stored", "source": source, "external_id": external_id}
 

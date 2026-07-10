@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Kontur backup every night
+
+[Timer]
+OnCalendar=*-*-* 00:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+Unit=kontur-backup.service
+
+[Install]
+WantedBy=timers.target

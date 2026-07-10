@@ -100,8 +100,8 @@ def _pg_details() -> dict:
         "host": os.getenv("POSTGRES_HOST", "postgres"),
         "port": int(os.getenv("POSTGRES_PORT", "5432")),
         "dbname": os.getenv("POSTGRES_DB", "kontur"),
-        "user": os.getenv("POSTGRES_USER", "kontur"),
-        "password": os.getenv("POSTGRES_PASSWORD", ""),
+        "user": os.getenv("METABASE_DB_USER") or os.getenv("POSTGRES_USER", "kontur"),
+        "password": os.getenv("METABASE_DB_PASSWORD") or os.getenv("POSTGRES_PASSWORD", ""),
         "ssl": False,
     }
 
@@ -111,8 +111,16 @@ def ensure_database(mb: MetabaseClient, name: str = "Контур роста") -
     existing = mb.get("/api/database").get("data", [])
     for db in existing:
         if db.get("name") == name:
-            return db["id"]
-    created = mb.post("/api/database", {"name": name, "engine": "postgres", "details": _pg_details()})
+            db_id = db["id"]
+            mb.put(
+                f"/api/database/{db_id}",
+                {"name": name, "engine": "postgres", "details": _pg_details()},
+            )
+            return db_id
+    created = mb.post(
+        "/api/database",
+        {"name": name, "engine": "postgres", "details": _pg_details()},
+    )
     db_id = created["id"]
     mb.post(f"/api/database/{db_id}/sync_schema", {})
     return db_id

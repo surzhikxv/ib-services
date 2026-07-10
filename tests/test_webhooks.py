@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from kontur.db import init_db, make_session_factory
 from kontur.models import RawRecord
-from kontur.webhooks import record_webhook
+from kontur.webhooks import record_webhook, webhook_authorized
 
 
 def _factory():
@@ -45,3 +45,33 @@ def test_payload_without_id_falls_back_to_content_hash():
     with factory() as s:
         n = s.scalar(select(func.count()).select_from(RawRecord))
     assert n == 2  # разные payload -> разные записи
+
+
+def test_generic_webhook_is_disabled_without_server_token():
+    assert not webhook_authorized(
+        "bothelp",
+        "request-token",
+        expected_token="",
+        allowed_sources="bothelp",
+    )
+
+
+def test_generic_webhook_requires_matching_token_and_allowed_source():
+    assert webhook_authorized(
+        "bothelp",
+        "request-token",
+        expected_token="request-token",
+        allowed_sources="bothelp, crm",
+    )
+    assert not webhook_authorized(
+        "crm",
+        "wrong-token",
+        expected_token="request-token",
+        allowed_sources="bothelp, crm",
+    )
+    assert not webhook_authorized(
+        "prodamus",
+        "request-token",
+        expected_token="request-token",
+        allowed_sources="bothelp, crm",
+    )

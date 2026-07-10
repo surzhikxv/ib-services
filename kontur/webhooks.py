@@ -7,12 +7,34 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 
 from sqlalchemy.orm import sessionmaker
 
 from kontur.db import upsert
 from kontur.models import RawRecord
+
+
+def webhook_authorized(
+    source: str,
+    token: str | None,
+    *,
+    expected_token: str,
+    allowed_sources: str,
+) -> bool:
+    """Проверить токен и allowlist общего webhook-ingest.
+
+    Пустой ``expected_token`` полностью выключает endpoint. Prodamus сюда не
+    относится: у платёжного webhook отдельная HMAC-проверка в ``bot/``.
+    """
+    allowed = {item.strip() for item in allowed_sources.split(",") if item.strip()}
+    return bool(
+        expected_token
+        and token
+        and source in allowed
+        and hmac.compare_digest(token, expected_token)
+    )
 
 
 def _external_id(payload: dict) -> str:

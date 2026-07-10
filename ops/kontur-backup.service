@@ -1,0 +1,13 @@
+[Unit]
+Description=Kontur daily PostgreSQL and application-volume backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kontur/ops/backup.sh
+Environment=BACKUP_ROOT=/var/backups/kontur
+Environment=RETENTION_DAYS=30
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

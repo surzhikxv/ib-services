@@ -26,4 +26,4 @@ ALTER TABLE content ADD COLUMN IF NOT EXISTS last_seen_run_id INTEGER REFERENCES
 -- проверить: \d content  → last_seen_run_id присутствует
 ```
 
-Статус: ☐ не применено на прод.
+Статус: ✅ применено 2026-07-01 (вручную через `docker exec kontur-postgres-1 psql`).

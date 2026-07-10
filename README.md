@@ -92,6 +92,8 @@ docker compose run --rm app python -m kontur.cli bothelp sync
 - API: http://localhost:8000/health, вебхуки — `POST /webhooks/bothelp`
 - n8n: http://localhost:5678 · Metabase: http://localhost:3000 (подключить как источник
   наш Postgres: host `postgres`, БД из `.env`)
+- Продовые backups, разделение прав, hardening и восстановление: [docs/operations.md](docs/operations.md).
+- Сборка единого image, deploy и автоматический rollback: [docs/deploy.md](docs/deploy.md).
 
 ## Схема озера данных
 
