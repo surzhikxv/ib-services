@@ -58,6 +58,7 @@ from .channel import approve_join_request, create_personal_invite, tariffs_for_c
 from .content import RAW_PATH, Block, Step, load_steps
 from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
+from .reminders import REMINDER_CALLBACK, reminders_enabled, run_reminder_loop
 from .render import PARSE_MODE, rows_for
 from .routing import CONFIRM_STEP_BY_TARIFF, ENTRY_STEP, Route, STAGE_BY_STEP, TARIFF_BY_INFO_STEP, build_routes
 from .webhook import make_webhook_app
@@ -407,6 +408,22 @@ async def on_paid_back(call: CallbackQuery) -> None:
     )
 
 
+@dp.callback_query(F.data == REMINDER_CALLBACK)
+async def on_reminder_tariffs(call: CallbackQuery) -> None:
+    """Open the package-choice screen from any follow-up reminder."""
+    target_step = 1
+    await call.answer()
+    await send_step(call.bot, call.message.chat.id, STEPS[target_step], track=True)
+    await _emit(
+        ingest.record_step_enter,
+        call.message.chat.id,
+        target_step,
+        uid=f"cq{call.id}",
+        stage_key=STAGE_BY_STEP.get(target_step),
+        tariff_key=None,
+    )
+
+
 @dp.chat_join_request()
 async def on_chat_join_request(request: ChatJoinRequest) -> None:
     """Автоодобрение заявки в канал, если пользователь уже оплатил этот тариф."""
@@ -687,6 +704,10 @@ async def _run() -> None:
         )
 
     tasks = [_polling_forever(bot)]
+    if reminders_enabled():
+        tasks.append(run_reminder_loop(bot))
+    else:
+        logger.info("Напоминания неоплатившим отключены.")
     if payments.PRODAMUS_SECRET:
         port = int(os.getenv("PRODAMUS_WEBHOOK_PORT", "8081"))
         tasks.append(_serve_webhook(on_paid, port))
