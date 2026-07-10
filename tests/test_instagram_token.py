@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kontur.connectors.instagram.client import InstagramClient
-from kontur.connectors.instagram.sync import refresh_if_stale, resolve_token
+from kontur.connectors.instagram.sync import refresh_if_stale, resolve_token, token_store_key
 from kontur.connectors.oauth import load_token, save_token
 from kontur.db import make_engine, make_session_factory
 from kontur.models import Base
@@ -33,6 +33,16 @@ def test_resolve_token_prefers_store():
     factory = _factory()
     save_token(factory, "instagram", access_token="stored")
     assert resolve_token(factory, env_token="env-tok") == "stored"
+
+
+def test_facebook_mode_uses_separate_token_store_key():
+    factory = _factory()
+    save_token(factory, "instagram", access_token="instagram-token")
+    assert token_store_key("facebook") == "instagram_facebook"
+    assert resolve_token(factory, env_token="facebook-token",
+                         connector=token_store_key("facebook")) == "facebook-token"
+    assert load_token(factory, "instagram").access_token == "instagram-token"
+    assert load_token(factory, "instagram_facebook").access_token == "facebook-token"
 
 
 def test_resolve_token_raises_without_any():

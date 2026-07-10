@@ -94,15 +94,19 @@ def _cmd_instagram_sync(args) -> int:
 
     from kontur.connectors.instagram.client import InstagramClient
     from kontur.connectors.instagram.sync import (
-        InstagramConnector, refresh_if_stale, resolve_token,
+        InstagramConnector, refresh_if_stale, resolve_token, token_store_key,
     )
 
     settings = get_settings()
+    if settings.instagram_auth_mode not in {"instagram", "facebook"}:
+        print("ERROR: INSTAGRAM_AUTH_MODE должен быть instagram или facebook", file=sys.stderr)
+        return 2
     engine = make_engine(settings.database_url)
     init_db(engine)
     factory = make_session_factory(engine)
+    token_key = token_store_key(settings.instagram_auth_mode)
     try:
-        token = resolve_token(factory, env_token=settings.instagram_access_token)
+        token = resolve_token(factory, env_token=settings.instagram_access_token, connector=token_key)
     except RuntimeError as e:
         print(f"ERROR: {e} (INSTAGRAM_ACCESS_TOKEN)", file=sys.stderr)
         return 2
@@ -112,14 +116,19 @@ def _cmd_instagram_sync(args) -> int:
                                version=settings.instagram_api_version,
                                proxy_url=settings.ig_proxy_url or None)
 
-    refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc))
-    token = resolve_token(factory, env_token=settings.instagram_access_token)
+    if settings.instagram_auth_mode == "instagram":
+        refresh_if_stale(factory, _cf, now=datetime.now(tz=timezone.utc), connector=token_key)
+        token = resolve_token(factory, env_token=settings.instagram_access_token, connector=token_key)
     with _cf(token) as client:
         days = getattr(args, "days", None) or 3
         stats = InstagramConnector(
             client, ig_user_id=settings.instagram_user_id or None,
+            page_id=settings.instagram_page_id or None,
+            auth_mode=settings.instagram_auth_mode,
             tz=settings.instagram_timezone, backfill_days=days,
             with_demographics=getattr(args, "demographics", False),
+            with_stories=getattr(args, "stories", False),
+            with_comments=getattr(args, "comments", False),
         ).run(factory)
     print("Instagram sync OK →", json.dumps(stats, ensure_ascii=False))
     return 0
@@ -137,6 +146,10 @@ def _cmd_instagram_refresh_token(args) -> int:
     from kontur.connectors.instagram.sync import refresh_if_stale
 
     settings = get_settings()
+    if settings.instagram_auth_mode != "instagram":
+        print("ERROR: instagram refresh-token поддерживает только Instagram Login token; "
+              "для Facebook Login обновляй токен через Meta/Facebook OAuth flow", file=sys.stderr)
+        return 2
     engine = make_engine(settings.database_url)
     init_db(engine)
     factory = make_session_factory(engine)
@@ -251,6 +264,96 @@ def _cmd_tiktok_sync(args) -> int:
     return 0
 
 
+def _telegram_channels(settings, args) -> list[str]:
+    from kontur.connectors.telegram_channel import parse_channel_ids
+
+    channels = parse_channel_ids(settings.telegram_channel_id, settings.telegram_channel_ids)
+    channels.extend(parse_channel_ids("", ",".join(getattr(args, "channel_id", []) or [])))
+    out: list[str] = []
+    for channel in channels:
+        if channel not in out:
+            out.append(channel)
+    return out
+
+
+def _cmd_telegram_check(args) -> int:
+    from kontur.connectors.telegram_channel.sync import TelegramConfigError, run_check
+
+    settings = get_settings()
+    channels = _telegram_channels(settings, args)
+    if not channels:
+        print("ERROR: заполни TELEGRAM_CHANNEL_ID или TELEGRAM_CHANNEL_IDS", file=sys.stderr)
+        return 2
+    try:
+        rows = run_check(settings.tg_api_id, settings.tg_api_hash, settings.tg_session, channels)
+    except TelegramConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print("Telegram check →", json.dumps(rows, ensure_ascii=False))
+    return 0
+
+
+def _cmd_telegram_sync(args) -> int:
+    from kontur.connectors.telegram_channel.sync import TelegramConfigError, run_sync
+
+    settings = get_settings()
+    channels = _telegram_channels(settings, args)
+    if not channels:
+        print("ERROR: заполни TELEGRAM_CHANNEL_ID или TELEGRAM_CHANNEL_IDS", file=sys.stderr)
+        return 2
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    factory = make_session_factory(engine)
+    try:
+        stats = run_sync(
+            settings.tg_api_id, settings.tg_api_hash, settings.tg_session, factory, channels,
+            limit=args.limit, with_message_stats=not args.skip_message_stats,
+        )
+    except TelegramConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print("Telegram sync OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
+def _cmd_telegram_bootstrap_session(args) -> int:
+    from pathlib import Path
+
+    from kontur.connectors.telegram_channel.session import run_bootstrap
+    from kontur.connectors.telegram_channel.sync import TelegramConfigError
+
+    settings = get_settings()
+    env_path = Path(args.env_file) if args.env_file else None
+    try:
+        run_bootstrap(settings.tg_api_id, settings.tg_api_hash, phone=settings.tg_phone, env_path=env_path)
+    except TelegramConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if env_path:
+        print(f"Telegram StringSession сохранена в {env_path} как TG_SESSION")
+    else:
+        print("Telegram StringSession выпущена. Перезапусти команду с --env-file, чтобы сохранить без печати секрета.")
+    return 0
+
+
+def _cmd_telegram_save_credentials(args) -> int:
+    from getpass import getpass
+    from pathlib import Path
+
+    from kontur.connectors.telegram_channel.session import save_credentials
+
+    env_path = Path(args.env_file)
+    api_id = input("TG_API_ID: ").strip()
+    api_hash = getpass("TG_API_HASH: ").strip()
+    phone = input("TG_PHONE optional (+79990000000, Enter to skip): ").strip()
+    if not api_id or not api_hash:
+        print("ERROR: TG_API_ID и TG_API_HASH обязательны", file=sys.stderr)
+        return 2
+    save_credentials(env_path, api_id=api_id, api_hash=api_hash, phone=phone)
+    print(f"Telegram credentials сохранены в {env_path} (значения не печатались)")
+    return 0
+
+
 def _cmd_metabase_provision(args) -> int:
     import os
 
@@ -349,14 +452,36 @@ def build_parser() -> argparse.ArgumentParser:
     tts.add_argument("--channel-title", default=None, help="название канала (режим без capture)")
     tts.set_defaults(func=_cmd_tiktok_sync)
 
-    ig = sub.add_parser("instagram", help="коннектор Instagram (органика, Instagram Login)") \
+    tg = sub.add_parser("telegram", help="коннектор Telegram-каналов (MTProto/Telethon)") \
+        .add_subparsers(dest="action", required=True)
+    tga = tg.add_parser("save-credentials", help="сохранить TG_API_ID/TG_API_HASH в .env без печати")
+    tga.add_argument("--env-file", default=".env", help="куда сохранить значения")
+    tga.set_defaults(func=_cmd_telegram_save_credentials)
+    tgb = tg.add_parser("bootstrap-session", help="интерактивно выпустить StringSession")
+    tgb.add_argument("--env-file", default=None, help="сохранить TG_SESSION в указанный .env без печати")
+    tgb.set_defaults(func=_cmd_telegram_bootstrap_session)
+    tgc = tg.add_parser("check", help="проверить авторизацию и доступ к каналам")
+    tgc.add_argument("--channel-id", action="append", default=[], help="добавочный канал (-100...)")
+    tgc.set_defaults(func=_cmd_telegram_check)
+    tgs = tg.add_parser("sync", help="выгрузить посты и статистику Telegram-каналов в озеро")
+    tgs.add_argument("--channel-id", action="append", default=[], help="добавочный канал (-100...)")
+    tgs.add_argument("--limit", type=int, default=30, help="сколько последних постов брать на канал")
+    tgs.add_argument("--skip-message-stats", action="store_true",
+                     help="не вызывать get_stats по каждому посту, взять только views/forwards из сообщения")
+    tgs.set_defaults(func=_cmd_telegram_sync)
+
+    ig = sub.add_parser("instagram", help="коннектор Instagram (Instagram/Facebook Login)") \
         .add_subparsers(dest="action", required=True)
     igs = ig.add_parser("sync", help="дневная выгрузка постов/Reels + метрик аккаунта")
     igs.add_argument("--days", type=int, default=3, help="окно дневных метрик аккаунта")
     igs.add_argument("--demographics", action="store_true", help="снять демографию аудитории")
+    igs.add_argument("--stories", action="store_true", help="снять активные Stories (Facebook Page mode)")
+    igs.add_argument("--comments", action="store_true", help="залендить comments/replies в raw_records")
     igs.set_defaults(func=_cmd_instagram_sync)
     igb = ig.add_parser("backfill", help="разовый бэкафилл за N дней (по умолчанию 90) + демография")
     igb.add_argument("--days", type=int, default=90)
+    igb.add_argument("--stories", action="store_true", help="снять активные Stories (Facebook Page mode)")
+    igb.add_argument("--comments", action="store_true", help="залендить comments/replies в raw_records")
     igb.set_defaults(func=_cmd_instagram_backfill)
     ig.add_parser("refresh-token", help="продлить long-lived токен (cron)") \
         .set_defaults(func=_cmd_instagram_refresh_token)

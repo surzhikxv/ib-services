@@ -31,6 +31,19 @@ def _database_url() -> str:
     return f"sqlite:///{data_dir / 'kontur.sqlite'}"
 
 
+def _instagram_auth_mode() -> str:
+    return os.getenv("INSTAGRAM_AUTH_MODE", "instagram").strip().lower()
+
+
+def _instagram_api_base() -> str:
+    explicit = os.getenv("INSTAGRAM_API_BASE")
+    if explicit:
+        return explicit
+    if _instagram_auth_mode() == "facebook":
+        return "https://graph.facebook.com"
+    return "https://graph.instagram.com"
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -48,8 +61,10 @@ class Settings:
     vk_api_base: str
     vk_api_version: str
     tiktok_ingest_token: str
+    instagram_auth_mode: str
     instagram_access_token: str
     instagram_user_id: str
+    instagram_page_id: str
     instagram_api_base: str
     instagram_api_version: str
     instagram_timezone: str
@@ -64,6 +79,12 @@ class Settings:
     yt_proxy_url: str
     yt_timezone: str
     ig_proxy_url: str
+    tg_api_id: str
+    tg_api_hash: str
+    tg_session: str
+    tg_phone: str
+    telegram_channel_id: str
+    telegram_channel_ids: str
 
 
 def get_settings() -> Settings:
@@ -83,9 +104,11 @@ def get_settings() -> Settings:
         vk_api_base=os.getenv("VK_API_BASE", "https://api.vk.com/method"),
         vk_api_version=os.getenv("VK_API_VERSION", "5.199"),
         tiktok_ingest_token=os.getenv("TIKTOK_INGEST_TOKEN", ""),
-        instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN", ""),
-        instagram_user_id=os.getenv("INSTAGRAM_USER_ID", ""),
-        instagram_api_base=os.getenv("INSTAGRAM_API_BASE", "https://graph.instagram.com"),
+        instagram_auth_mode=_instagram_auth_mode(),
+        instagram_access_token=os.getenv("INSTAGRAM_ACCESS_TOKEN") or os.getenv("IG_LONG_LIVED_TOKEN", ""),
+        instagram_user_id=os.getenv("INSTAGRAM_USER_ID") or os.getenv("IG_USER_ID", ""),
+        instagram_page_id=os.getenv("INSTAGRAM_PAGE_ID") or os.getenv("FB_PAGE_ID", ""),
+        instagram_api_base=_instagram_api_base(),
         instagram_api_version=os.getenv("INSTAGRAM_API_VERSION", "v25.0"),
         instagram_timezone=os.getenv("INSTAGRAM_TIMEZONE", "Europe/Moscow"),
         yt_api_key=os.getenv("YT_API_KEY", ""),
@@ -99,4 +122,10 @@ def get_settings() -> Settings:
         yt_proxy_url=os.getenv("YT_PROXY_URL", ""),
         yt_timezone=os.getenv("YT_TIMEZONE", "America/Los_Angeles"),
         ig_proxy_url=os.getenv("IG_PROXY_URL", ""),
+        tg_api_id=os.getenv("TG_API_ID", ""),
+        tg_api_hash=os.getenv("TG_API_HASH", ""),
+        tg_session=os.getenv("TG_SESSION", ""),
+        tg_phone=os.getenv("TG_PHONE", ""),
+        telegram_channel_id=os.getenv("TELEGRAM_CHANNEL_ID", ""),
+        telegram_channel_ids=os.getenv("TELEGRAM_CHANNEL_IDS", ""),
     )

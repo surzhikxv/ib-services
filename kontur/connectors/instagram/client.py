@@ -1,8 +1,10 @@
-"""HTTP-клиент Instagram Graph API (graph.instagram.com, Instagram Login).
+"""HTTP-клиент Instagram Graph API.
 
 Особенности, заложенные здесь:
 - Ошибки приходят телом ``{"error": {"code", "message"}}`` — проверяем явно.
-- /me/media пагинируется курсором paging.cursors.after.
+- Поддержаны оба пути: Instagram Login (graph.instagram.com) и Facebook Login
+  для Instagram Business Account, привязанного к Facebook Page (graph.facebook.com).
+- media/comments/replies/stories пагинируются курсором paging.cursors.after.
 - insights бьём по совместимым группам метрик; несовместимая метрика валит весь
   вызов ("An unknown error has occurred") → откат на по-метричный перебор.
 - Токен в query-параметре access_token, поэтому URL'ы НЕ логируем.
@@ -26,6 +28,20 @@ class InstagramError(RuntimeError):
 
 
 class InstagramClient:
+    _INSTAGRAM_LOGIN_ACCOUNT_FIELDS = (
+        "user_id,username,account_type,followers_count,follows_count,"
+        "media_count,name,profile_picture_url"
+    )
+    _FACEBOOK_LOGIN_ACCOUNT_FIELDS = (
+        "id,ig_id,username,followers_count,follows_count,media_count,"
+        "name,profile_picture_url,biography,website"
+    )
+    _MEDIA_FIELDS = (
+        "id,media_type,media_product_type,caption,permalink,"
+        "timestamp,like_count,comments_count,thumbnail_url"
+    )
+    _COMMENT_FIELDS = "id,text,timestamp,username,like_count"
+
     def __init__(self, token: str, *, transport=None, proxy_url: str | None = None,
                  api_base: str = "https://graph.instagram.com", version: str = "v25.0",
                  timeout: float = 30.0, sleep=time.sleep, max_retries: int = 2):
@@ -66,23 +82,45 @@ class InstagramClient:
     def me(self) -> dict:
         return self._call(
             "me",
-            fields="user_id,username,account_type,followers_count,follows_count,"
-                   "media_count,name,profile_picture_url",
+            fields=self._INSTAGRAM_LOGIN_ACCOUNT_FIELDS,
         )
 
-    def iter_media(self) -> Iterator[dict]:
+    def account(self, ig_user_id: str) -> dict:
+        """Вернуть Instagram Business/Creator account по ID (Facebook Login path)."""
+        return self._call(str(ig_user_id), fields=self._FACEBOOK_LOGIN_ACCOUNT_FIELDS)
+
+    def page_instagram_account(self, page_id: str) -> dict:
+        """Разрешить Facebook Page → привязанный Instagram Business Account."""
+        body = self._call(
+            str(page_id),
+            fields=f"instagram_business_account{{{self._FACEBOOK_LOGIN_ACCOUNT_FIELDS}}}",
+        )
+        account = body.get("instagram_business_account")
+        if not account:
+            raise InstagramError(None, "Facebook Page has no linked instagram_business_account")
+        return account
+
+    def _iter_edge(self, path: str, *, fields: str, limit: int = 50) -> Iterator[dict]:
         after = None
         while True:
-            body = self._call(
-                "me/media",
-                fields="id,media_type,media_product_type,caption,permalink,"
-                       "timestamp,like_count,comments_count,thumbnail_url",
-                after=after, limit=50,
-            )
+            body = self._call(path, fields=fields, after=after, limit=limit)
             yield from body.get("data", [])
             after = (((body.get("paging") or {}).get("cursors")) or {}).get("after")
             if not after:
                 break
+
+    def iter_media(self, ig_user_id: str | None = None) -> Iterator[dict]:
+        path = f"{ig_user_id}/media" if ig_user_id else "me/media"
+        yield from self._iter_edge(path, fields=self._MEDIA_FIELDS)
+
+    def iter_stories(self, ig_user_id: str) -> Iterator[dict]:
+        yield from self._iter_edge(f"{ig_user_id}/stories", fields=self._MEDIA_FIELDS)
+
+    def iter_comments(self, media_id: str) -> Iterator[dict]:
+        yield from self._iter_edge(f"{media_id}/comments", fields=self._COMMENT_FIELDS)
+
+    def iter_replies(self, comment_id: str) -> Iterator[dict]:
+        yield from self._iter_edge(f"{comment_id}/replies", fields=self._COMMENT_FIELDS)
 
     def _insights(self, path: str, metrics: list[str], **extra) -> dict[str, dict]:
         """Запросить набор метрик с откатом на по-метричный перебор.

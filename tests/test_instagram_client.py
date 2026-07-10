@@ -24,6 +24,24 @@ def test_iter_media_follows_cursor_pages():
     assert ids == ["1", "2", "3"]
 
 
+def test_page_instagram_account_resolves_linked_account():
+    page_account = {"id": "17841400000000000", "username": "lapychev"}
+    transport, calls = make_transport(me=ME, media_pages=[[]], page_account=page_account)
+    with _client(transport) as c:
+        account = c.page_instagram_account("fb-page-1")
+    assert account["id"] == "17841400000000000"
+    assert calls[0][0] == "fb-page-1"
+
+
+def test_iter_media_accepts_explicit_account_id():
+    pages = [[{"id": "1"}]]
+    transport, calls = make_transport(me=ME, media_pages=pages)
+    with _client(transport) as c:
+        ids = [m["id"] for m in c.iter_media("17841400000000000")]
+    assert ids == ["1"]
+    assert calls[0][0] == "media"
+
+
 def test_error_body_raises_instagram_error():
     transport, _ = make_transport(me=ME, media_pages=[[]],
                                   errors={"me": {"code": 190, "message": "bad token"}})

@@ -10,6 +10,9 @@ from tests.instagram_fake import make_transport
 
 ME = {"user_id": "17841400000000000", "username": "lapychev", "account_type": "Media_Creator",
       "followers_count": 1200, "follows_count": 80, "media_count": 2}
+FB_ACCOUNT = {"id": "17841400000000000", "ig_id": "111222333", "username": "lapychev",
+              "followers_count": 1200, "follows_count": 80, "media_count": 2,
+              "name": "Сергей Лапычев"}
 MEDIA = [{"id": "111", "media_product_type": "FEED", "media_type": "IMAGE", "caption": "пост",
           "permalink": "https://instagram.com/p/111", "timestamp": "2026-06-20T08:00:00+0000",
           "like_count": 30, "comments_count": 3},
@@ -72,6 +75,38 @@ def test_ingest_lands_raw():
     raws = {(r.entity_type, r.external_id) for r in s.scalars(select(RawRecord)).all()}
     assert ("account", "17841400000000000") in raws
     assert ("media", "111") in raws and ("media", "222") in raws
+
+
+def test_ingest_facebook_page_mode_lands_account_stories_comments():
+    story = {"id": "story-1", "media_type": "IMAGE", "permalink": "https://instagram.com/stories/1",
+             "timestamp": "2026-06-28T08:00:00+0000"}
+    transport, _ = make_transport(
+        me=ME,
+        media_pages=[MEDIA[:1]],
+        media_insights={"reach": 1},
+        account_insights={"reach": 9},
+        page_account=FB_ACCOUNT,
+        story_pages=[[story]],
+        comments_by_media={"111": [{"id": "c1", "text": "вопрос", "username": "viewer"}]},
+        replies_by_comment={"c1": [{"id": "r1", "text": "ответ", "username": "lapychev"}]},
+    )
+    factory = _factory()
+    client = InstagramClient("tok", transport=transport, sleep=lambda *_: None,
+                             api_base="https://graph.facebook.com")
+    stats = InstagramConnector(
+        client, page_id="fb-page-1", auth_mode="facebook", snapshot_date=SNAP,
+        tz="UTC", backfill_days=1, with_stories=True, with_comments=True,
+    ).run(factory)
+    s = factory()
+    ch = s.scalars(select(Channel)).one()
+    assert ch.external_id == "17841400000000000" and ch.title == "lapychev"
+    raws = {(r.entity_type, r.external_id) for r in s.scalars(select(RawRecord)).all()}
+    assert ("account", "17841400000000000") in raws
+    assert ("media", "story-1") in raws
+    assert ("comment", "c1") in raws
+    assert ("comment_reply", "r1") in raws
+    assert stats["auth_mode"] == "facebook"
+    assert stats["stories"] == 1 and stats["comments"] == 1 and stats["comment_replies"] == 1
 
 
 def test_ingest_idempotent_across_runs():
