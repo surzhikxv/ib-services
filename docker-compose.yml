@@ -9,7 +9,8 @@
 
 services:
   postgres:
-    image: postgres:16
+    # Pinned digest: Postgres 16 runtime verified on 2026-07-10.
+    image: postgres:16@sha256:fe03a7605299a34ddf5e4f285dff78c3d7190a576b3c6b46f2fcff69f4bffd54
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-kontur}
@@ -18,7 +19,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      # только локально — наружу БД не светим (доступ через SSH-туннель/сеть compose)
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kontur} -d ${POSTGRES_DB:-kontur}"]
       interval: 5s
@@ -26,11 +28,15 @@ services:
       retries: 10
 
   app:
+    image: ${KONTUR_IMAGE:-kontur-app:latest}
     build: .
     restart: unless-stopped
+    init: true
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       # внутри сети compose БД доступна по имени сервиса postgres
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kontur}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-kontur}
@@ -43,6 +49,8 @@ services:
       METABASE_URL: ${METABASE_URL:-http://metabase:3000}
       METABASE_USER: ${METABASE_USER:-}
       METABASE_PASSWORD: ${METABASE_PASSWORD:-}
+      METABASE_DB_USER: ${METABASE_DB_USER:-metabase_ro}
+      METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-}
       BOTHELP_CLIENT_ID: ${BOTHELP_CLIENT_ID}
       BOTHELP_CLIENT_SECRET: ${BOTHELP_CLIENT_SECRET}
       BOTHELP_OAUTH_URL: ${BOTHELP_OAUTH_URL:-https://oauth.bothelp.io/oauth2/token}
@@ -55,13 +63,60 @@ services:
       LLM_PROXY_URL: ${LLM_PROXY_URL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TIKTOK_INGEST_TOKEN: ${TIKTOK_INGEST_TOKEN:-}
+      WEBHOOK_INGEST_TOKEN: ${WEBHOOK_INGEST_TOKEN:-}
+      WEBHOOK_ALLOWED_SOURCES: ${WEBHOOK_ALLOWED_SOURCES:-bothelp}
+      INSTAGRAM_AUTH_MODE: ${INSTAGRAM_AUTH_MODE:-instagram}
+      INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
+      INSTAGRAM_USER_ID: ${INSTAGRAM_USER_ID:-}
+      INSTAGRAM_PAGE_ID: ${INSTAGRAM_PAGE_ID:-}
+      FB_PAGE_ID: ${FB_PAGE_ID:-}
+      INSTAGRAM_API_BASE: ${INSTAGRAM_API_BASE:-}
+      INSTAGRAM_API_VERSION: ${INSTAGRAM_API_VERSION:-v25.0}
+      INSTAGRAM_TIMEZONE: ${INSTAGRAM_TIMEZONE:-Europe/Moscow}
+      IG_PROXY_URL: ${IG_PROXY_URL:-}
     # создаём схему+сиды, затем поднимаем API (приём вебхуков)
     command: sh -c "python -m kontur.cli db init && uvicorn kontur.api:app --host 0.0.0.0 --port 8000"
     ports:
-      - "8000:8000"
+      # наружу — только через nginx (api.slapychev.ru); сам порт держим на localhost
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  bot:
+    image: ${KONTUR_IMAGE:-kontur-app:latest}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kontur}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-kontur}
+      PRODAMUS_WEBHOOK_PORT: "8081"
+      BOT_MEDIA_DIR: /app/media
+    command: ["python", "-m", "bot.bot"]
+    volumes:
+      - ${KONTUR_RAW_DIR:-./raw}:/app/raw:ro
+      - ${KONTUR_MEDIA_DIR:-./media}:/app/media:ro
+    ports:
+      - "127.0.0.1:${PRODAMUS_WEBHOOK_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
 
   n8n:
-    image: n8nio/n8n:latest
+    # n8n 2.27.4. Upgrade explicitly after backup and smoke-test.
+    image: n8nio/n8n@sha256:cf11c96b0d0089bb24459bf97b445fd7008f41543b673cce4d955f7c0ed8752d
     restart: unless-stopped
     environment:
       N8N_BASIC_AUTH_ACTIVE: "true"
@@ -69,14 +124,23 @@ services:
       N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-change_me}
       GENERIC_TIMEZONE: ${TZ:-Europe/Moscow}
       N8N_PORT: "5678"
+      # за обратным прокси (flow.slapychev.ru): корректные URL редактора/вебхуков
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-}
+      N8N_EDITOR_BASE_URL: ${N8N_WEBHOOK_URL:-}
+      N8N_PROXY_HOPS: "1"
     volumes:
       - n8ndata:/home/node/.n8n
     ports:
-      - "5678:5678"
+      - "127.0.0.1:5678:5678"
 
   metabase:
-    image: metabase/metabase:latest
+    # Metabase v0.62.3.3. Upgrade explicitly after backup and card-query check.
+    image: metabase/metabase@sha256:892bda65791f4f996c1ac0d6bff8876e27dba440faa0c3d7349027ff91aa7c75
     restart: unless-stopped
+    # лимит памяти + -Xmx1g: на 8 ГБ-VPS JVM Metabase иначе разрастается и душит соседей
+    mem_limit: 1536m
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,10 +148,13 @@ services:
       # внутреннюю БД Metabase держим в отдельном Postgres-каталоге того же сервера —
       # для MVP проще оставить встроенную H2 на томе:
       MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_OPTS: -Xmx1g
+      # публичный адрес за обратным прокси (для корректных ссылок/писем)
+      MB_SITE_URL: ${MB_SITE_URL:-}
     volumes:
       - metabasedata:/metabase-data
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
 
 volumes:
   pgdata:

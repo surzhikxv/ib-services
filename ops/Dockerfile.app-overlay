@@ -1,0 +1,14 @@
+# Registry-rate-limit fallback: rebuild the unified runtime on the last verified
+# app image. The regular Dockerfile remains the source for clean builds.
+ARG BASE_IMAGE=kontur-app:latest
+FROM ${BASE_IMAGE}
+
+COPY pyproject.toml ./
+COPY requirements.lock ./
+COPY kontur ./kontur
+COPY bot ./bot
+COPY db ./db
+COPY media ./media
+
+RUN pip install -r requirements.lock \
+    && pip install --no-deps -e .

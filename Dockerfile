@@ -1,6 +1,6 @@
-# Образ приложения «Контур роста» (FastAPI + CLI коннекторов).
-# База — 3.12-slim: гарантированы колёса для psycopg/pydantic (на 3.14 их ещё нет).
-FROM python:3.12-slim
+# Единый образ: FastAPI, все CLI-коннекторы и Telegram-бот.
+# Python 3.12.13 slim-trixie, официальный multi-platform digest от 2026-07-10.
+FROM python:3.12.13-slim-trixie@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -9,11 +9,17 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY pyproject.toml ./
+COPY requirements.lock ./
 COPY kontur ./kontur
+COPY bot ./bot
 COPY db ./db
-RUN pip install -e ".[api,postgres,ai]"
+COPY media ./media
 
-EXPOSE 8000
+# Lock фиксирует весь dependency graph; сам проект ставится editable без повторного resolve.
+RUN pip install -r requirements.lock \
+    && pip install --no-deps -e .
+
+EXPOSE 8000 8081
 
 # Команду задаёт docker-compose (db init + uvicorn). По умолчанию — API.
 CMD ["uvicorn", "kontur.api:app", "--host", "0.0.0.0", "--port", "8000"]
