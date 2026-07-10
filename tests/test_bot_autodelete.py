@@ -26,11 +26,13 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple[str, int]] = []
         self.deleted: list[tuple[int, int]] = []
+        self.events: list[tuple[str, int]] = []
         self._next_id = 1000
 
     async def _send(self, kind: str, chat_id: int):
         self._next_id += 1
         self.sent.append((kind, self._next_id))
+        self.events.append(("send", self._next_id))
         return SimpleNamespace(message_id=self._next_id)
 
     async def send_message(self, chat_id, text, **kw):
@@ -44,6 +46,7 @@ class FakeBot:
 
     async def delete_message(self, chat_id, message_id):
         self.deleted.append((chat_id, message_id))
+        self.events.append(("delete", message_id))
 
 
 def _funnel():
@@ -70,13 +73,49 @@ def test_next_step_deletes_previous():
         assert first_ids and b.STEP_MESSAGES[chat] == first_ids
         assert fake.deleted == []
 
-        # Шаг 1 — переход: сообщения шага 0 удалены, в трекере только новые.
+        # Шаг 1 — переход: сообщения шага 0 удалены до отправки шага 1.
         fake.sent.clear()
+        fake.events.clear()
         await b.send_step(fake, chat, b.STEPS[1], track=True)
         second_ids = [mid for _, mid in fake.sent]
+        assert fake.events[:len(first_ids)] == [("delete", mid) for mid in first_ids]
+        assert all(kind == "send" for kind, _ in fake.events[len(first_ids):])
         assert sorted(mid for _, mid in fake.deleted) == sorted(first_ids)
         assert b.STEP_MESSAGES[chat] == second_ids
         assert set(second_ids).isdisjoint(first_ids)
+
+    asyncio.run(scenario())
+
+
+def test_paid_confirmation_step_is_not_deleted_on_next_transition():
+    b = _funnel()
+    fake = FakeBot()
+    chat = 556
+
+    async def scenario():
+        # Инфо о премиум-пакете: обычный шаг, его можно удалить после оплаты.
+        await b.send_step(fake, chat, b.STEPS[4], track=True)
+        package_ids = [mid for _, mid in fake.sent]
+        assert package_ids and b.STEP_MESSAGES[chat] == package_ids
+
+        # Страница «оплата прошла» сначала удаляет предыдущий шаг, но сама не попадает в трекер.
+        fake.sent.clear()
+        fake.events.clear()
+        await b.send_step(fake, chat, b.STEPS[5], track=True)
+        confirm_ids = [mid for _, mid in fake.sent]
+        assert fake.events[:len(package_ids)] == [("delete", mid) for mid in package_ids]
+        assert sorted(mid for _, mid in fake.deleted) == sorted(package_ids)
+        assert confirm_ids
+        assert chat not in b.STEP_MESSAGES
+
+        # Возврат назад не удаляет страницу «оплата прошла».
+        fake.deleted.clear()
+        fake.sent.clear()
+        await b.send_step(fake, chat, b.STEPS[1], track=True)
+        back_ids = [mid for _, mid in fake.sent]
+        assert fake.deleted == []
+        assert b.STEP_MESSAGES[chat] == back_ids
+        assert set(confirm_ids).isdisjoint(back_ids)
 
     asyncio.run(scenario())
 

@@ -12,13 +12,14 @@ Prodamus после успешной оплаты шлёт POST (form-urlencoded
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Awaitable, Callable
 
 from aiohttp import web
 
-from .payments import WEBHOOK_PATH, parse_order_id, sign, verify
+from .payments import WEBHOOK_PATH, resolve_payment_identity, sign, verify
 
 logger = logging.getLogger("bot.webhook")
 
@@ -54,6 +55,15 @@ def _listify(obj):
 
 
 def make_webhook_app(on_paid: OnPaid) -> web.Application:
+    async def health(_request: web.Request) -> web.Response:
+        return web.Response(text="ok")
+
+    async def run_on_paid(tg_id: int, tariff: str, data: dict, order_id: str) -> None:
+        try:
+            await on_paid(tg_id, tariff, data)
+        except Exception:  # noqa: BLE001 — Prodamus уже получил 200, ошибку фиксируем в логах
+            logger.exception("Prodamus: ошибка в фоновой обработке оплаты %s", order_id)
+
     async def handle(request: web.Request) -> web.Response:
         form = await request.post()
         data = _listify(_parse_nested(list(form.items())))
@@ -69,24 +79,29 @@ def make_webhook_app(on_paid: OnPaid) -> web.Application:
             return web.Response(status=403, text="bad signature")
 
         order_id = str(data.get("order_id", "")) if isinstance(data, dict) else ""
-        tg_id, tariff = parse_order_id(order_id)
+        tg_id, tariff = resolve_payment_identity(data if isinstance(data, dict) else {})
         status = str(data.get("payment_status", "") if isinstance(data, dict) else "").lower()
 
         if tg_id is None or tariff is None:
-            logger.warning("Prodamus: не разобран order_id=%r", order_id)
+            products = data.get("products") if isinstance(data, dict) else None
+            logger.warning(
+                "Prodamus: не разобрана оплата order_id=%r customer_extra=%r sum=%r amount=%r products=%r",
+                order_id,
+                data.get("customer_extra") if isinstance(data, dict) else None,
+                data.get("sum") if isinstance(data, dict) else None,
+                data.get("amount") if isinstance(data, dict) else None,
+                products,
+            )
             return web.Response(text="ok")  # подпись валидна, но заказ чужой — не падаем
         if status and status not in _SUCCESS_STATUSES:
             logger.info("Prodamus: оплата %s статус=%s — пропускаем", order_id, status)
             return web.Response(text="ok")
 
         logger.info("Prodamus: оплата подтверждена tg=%s тариф=%s order=%s", tg_id, tariff, order_id)
-        try:
-            await on_paid(tg_id, tariff, data if isinstance(data, dict) else {})
-        except Exception:  # noqa: BLE001 — Prodamus должен получить 200, иначе будет ретраить
-            logger.exception("Prodamus: ошибка в обработке оплаты %s", order_id)
+        asyncio.create_task(run_on_paid(tg_id, tariff, data if isinstance(data, dict) else {}, order_id))
         return web.Response(text="success")
 
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle)
-    app.router.add_get("/health", lambda _r: web.Response(text="ok"))
+    app.router.add_get("/health", health)
     return app

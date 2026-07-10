@@ -16,7 +16,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 # --- Конфиг магазина (из .env) ----------------------------------------------
@@ -49,6 +51,13 @@ def configured() -> bool:
     return bool(PRODAMUS_DOMAIN and PRODAMUS_SECRET)
 
 
+def notification_url() -> str:
+    """Публичный URL, на который Prodamus должен прислать webhook после оплаты."""
+    if not PUBLIC_BASE_URL:
+        return ""
+    return f"{PUBLIC_BASE_URL}{WEBHOOK_PATH}"
+
+
 # --- order_id: зашиваем tg_id и тариф ----------------------------------------
 
 def make_order_id(tg_id: int, tariff: str) -> str:
@@ -64,6 +73,63 @@ def parse_order_id(order_id: str) -> tuple[int | None, str | None]:
     except (ValueError, AttributeError):
         pass
     return None, None
+
+
+def parse_customer_extra(data: dict) -> int | None:
+    """Достать tg_id из customer_extra вида `tg:123`.
+
+    Prodamus может прислать в webhook свой числовой order_id вместо нашего
+    `tg<id>-<tariff>-<ts>`. Поэтому в ссылку дополнительно кладём customer_extra.
+    """
+    extra = str(data.get("customer_extra", "") if isinstance(data, dict) else "")
+    match = re.search(r"(?:^|[^\w])tg:?(\d+)(?:$|[^\w])", extra)
+    return int(match.group(1)) if match else None
+
+
+def _amount_key(value) -> str:
+    text = str(value or "").replace("\xa0", "").replace(" ", "").replace(",", ".")
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return ""
+    try:
+        amount = Decimal(match.group(0))
+    except InvalidOperation:
+        return ""
+    if amount == amount.to_integral_value():
+        return str(int(amount))
+    return str(amount.normalize())
+
+
+def tariff_from_payment_data(data: dict) -> str | None:
+    """Определить тариф из webhook по товару/цене, если order_id не содержит тариф."""
+    if not isinstance(data, dict):
+        return None
+
+    by_name = {cfg["name"].casefold(): key for key, cfg in TARIFFS.items()}
+    by_price = {_amount_key(cfg["price"]): key for key, cfg in TARIFFS.items()}
+    products = data.get("products") or []
+    if isinstance(products, dict):
+        products = [products[k] for k in sorted(products) if isinstance(products[k], dict)]
+    if isinstance(products, list):
+        for product in products:
+            if not isinstance(product, dict):
+                continue
+            name = str(product.get("name", "")).casefold()
+            if name in by_name:
+                return by_name[name]
+            price_key = _amount_key(product.get("price") or product.get("sum") or product.get("amount"))
+            if price_key in by_price:
+                return by_price[price_key]
+
+    amount_key = _amount_key(data.get("sum") or data.get("amount"))
+    return by_price.get(amount_key)
+
+
+def resolve_payment_identity(data: dict) -> tuple[int | None, str | None]:
+    """Разобрать, кому и какой тариф выдать по webhook Prodamus."""
+    order_id = str(data.get("order_id", "") if isinstance(data, dict) else "")
+    tg_id, tariff = parse_order_id(order_id)
+    return tg_id or parse_customer_extra(data), tariff or tariff_from_payment_data(data)
 
 
 # --- Подпись Prodamus (HMAC) -------------------------------------------------
@@ -138,8 +204,9 @@ def payment_data(tg_id: int, tariff: str) -> dict:
         "products": [{"name": cfg["name"], "price": cfg["price"], "quantity": "1"}],
         "do": "pay",
     }
-    if PUBLIC_BASE_URL:
-        data["urlNotification"] = f"{PUBLIC_BASE_URL}{WEBHOOK_PATH}"
+    notify_url = notification_url()
+    if notify_url:
+        data["urlNotification"] = notify_url
     if PAYMENT_RETURN_URL:
         data["urlReturn"] = PAYMENT_RETURN_URL
         data["urlSuccess"] = PAYMENT_RETURN_URL

@@ -23,6 +23,7 @@ import logging
 import os
 import socket
 
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import certifi
@@ -43,6 +44,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    ChatJoinRequest,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -52,7 +54,7 @@ from aiogram.types import (
 from aiohttp import web
 
 from . import payments
-from .channel import grant_access
+from .channel import approve_join_request, create_personal_invite, tariffs_for_chat_id
 from .content import RAW_PATH, Block, Step, load_steps
 from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
@@ -71,6 +73,35 @@ ROUTES: dict[tuple[int, int, int], Route] = {}
 # Сообщения текущего показанного шага по чатам (message_id) — чтобы стирать их при
 # переходе на следующий шаг и держать чат чистым (видно только актуальный шаг).
 STEP_MESSAGES: dict[int, list[int]] = {}
+PERSISTENT_STEP_IDS: set[int] = set(CONFIRM_STEP_BY_TARIFF.values())
+TARIFF_BY_CONFIRM_STEP = {step: tariff for tariff, step in CONFIRM_STEP_BY_TARIFF.items()}
+PAID_BACK_TARGET_STEP = 1
+
+PAID_PACKAGE_TITLES = {
+    "basic": "Базовый",
+    "standard": "Стандарт",
+    "premium": "Премиум",
+}
+
+PAID_PACKAGE_FEATURES = {
+    "basic": (
+        "📹 Уроки 1–19",
+        "Доступ к видео навсегда",
+    ),
+    "standard": (
+        "📹 Уроки 1–19",
+        "💬 Закрытый чат участников",
+        "📺 Прямые эфиры доступны",
+        "Доступ к видео и чату навсегда",
+    ),
+    "premium": (
+        "📹 Уроки 1–19",
+        "💬 Закрытый чат участников",
+        "🎯 2 личные консультации",
+        "Доступ к видео и чату навсегда",
+        "Для записи на консультации: @slapychev__work",
+    ),
+}
 
 
 def _cb(step_idx: int, block_idx: int, button_idx: int) -> str:
@@ -121,6 +152,68 @@ def _resolved_url(route: Route | None, chat_id: int | None = None) -> str | None
     return None
 
 
+def _fallback_channel_url(tariff: str) -> str | None:
+    """Статическая ссылка на канал из старого post-payment шага, если авто-инвайт выключен."""
+    confirm = CONFIRM_STEP_BY_TARIFF.get(tariff)
+    if confirm is None:
+        return None
+    try:
+        step = STEPS[confirm]
+    except IndexError:
+        return None
+    for bi, block in enumerate(getattr(step, "blocks", ())):
+        for ki, _btn in enumerate(block.buttons):
+            route = ROUTES.get((confirm, bi, ki))
+            if route and route.kind == "url" and route.url:
+                return route.url
+    return None
+
+
+def _tariff_for_terminal_step(step_index: int) -> str | None:
+    """Тариф старого post-payment шага с terminal-кнопкой, если это такой шаг."""
+    return TARIFF_BY_CONFIRM_STEP.get(step_index)
+
+
+def _paid_confirmation_text(tariff: str, direct_access: bool) -> str:
+    """Текст нового post-payment экрана: один понятный CTA вместо ручного шага."""
+    title = PAID_PACKAGE_TITLES.get(tariff, "выбранный")
+    features = PAID_PACKAGE_FEATURES.get(tariff, ())
+    lines = [f"✅ Оплата прошла! Твой пакет {title} активирован."]
+    if features:
+        lines.extend(("", *features))
+    lines.append("")
+    if direct_access:
+        lines.append("Доступ открыт. Нажми кнопку ниже — Telegram сразу откроет канал.")
+    else:
+        lines.append("Доступ открыт. Нажми кнопку ниже, чтобы перейти в канал.")
+    return "\n".join(lines)
+
+
+def _paid_confirmation_keyboard(
+    url: str,
+    direct_access: bool,
+) -> InlineKeyboardMarkup:
+    title = "Войти в канал" if direct_access else "Перейти в канал"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=title, url=url)],
+        [InlineKeyboardButton(text="Назад", callback_data=f"paid_back:{PAID_BACK_TARGET_STEP}")],
+    ])
+
+
+async def _send_persistent_message(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> int:
+    """Отправить постоянное сообщение и убрать предыдущий tracked-шаг."""
+    previous = STEP_MESSAGES.get(chat_id, [])
+    msg = await bot.send_message(chat_id, text, parse_mode=None, reply_markup=reply_markup)
+    await _delete_messages(bot, chat_id, previous)
+    STEP_MESSAGES.pop(chat_id, None)
+    return msg.message_id
+
+
 async def send_block(bot: Bot, chat_id: int, step: Step, block_idx: int, block: Block) -> int:
     """Отправить один блок шага как отдельное сообщение — дословно, как в BotHelp.
 
@@ -168,10 +261,14 @@ async def send_step(
     """Отправить шаг целиком (все блоки по порядку).
 
     header=True — для отладочного /all (заголовок шага).
-    track=True  — навигация по воронке: после показа нового шага стираем сообщения
-                  предыдущего и запоминаем текущие (см. STEP_MESSAGES). Служебные
+    track=True  — навигация по воронке: сначала стираем сообщения предыдущего
+                  шага, затем отправляем новый и запоминаем его (см. STEP_MESSAGES). Служебные
                   /all и /step идут с track=False и историю чата не трогают.
     """
+    previous = STEP_MESSAGES.get(chat_id, []) if track else []
+    if track:
+        await _delete_messages(bot, chat_id, previous)
+        STEP_MESSAGES.pop(chat_id, None)
     if header:
         await bot.send_message(chat_id, f"── ШАГ {step.index}: {step.title} ──")
     if step.is_stub:
@@ -180,7 +277,6 @@ async def send_step(
                 chat_id, f"〔шаг {step.index} «{step.title}» — {step.top_type}: контента нет〕"
             )
         return
-    previous = STEP_MESSAGES.get(chat_id, []) if track else []
     new_ids: list[int] = []
     for bi, block in enumerate(step.blocks):
         try:
@@ -189,9 +285,44 @@ async def send_step(
             logger.warning("шаг %s блок %s не отправлен: %s", step.index, bi, e)
             await bot.send_message(chat_id, f"〔шаг {step.index} блок {bi}: ошибка отправки〕")
     if track:
-        # Сначала показали новый шаг, теперь убираем предыдущий — пользователь не видит пустого чата.
-        await _delete_messages(bot, chat_id, previous)
-        STEP_MESSAGES[chat_id] = new_ids
+        if step.index in PERSISTENT_STEP_IDS:
+            STEP_MESSAGES.pop(chat_id, None)
+        else:
+            STEP_MESSAGES[chat_id] = new_ids
+
+
+async def _send_paid_confirmation(
+    bot: Bot, tg_id: int, tariff: str, invite_link: str | None = None
+) -> bool:
+    """Дослать страницу «оплата прошла» после webhook.
+
+    Возвращает True, если штатный post-payment экран отправлен. Ручной кнопки
+    подтверждения заявки больше нет: доступ выдаётся инвайтом или join-request handler.
+    """
+    access_url = invite_link or _fallback_channel_url(tariff)
+    if access_url:
+        try:
+            direct_access = invite_link is not None
+            await _send_persistent_message(
+                bot,
+                tg_id,
+                _paid_confirmation_text(tariff, direct_access),
+                reply_markup=_paid_confirmation_keyboard(access_url, direct_access),
+            )
+            return True
+        except Exception:  # noqa: BLE001 — запись оплаты не должна зависеть от сообщения в Telegram
+            logger.exception("Не удалось отправить новый экран оплаты tg=%s тариф=%s", tg_id, tariff)
+
+    try:
+        await bot.send_message(
+            tg_id,
+            "Оплата прошла. Спасибо! Не удалось автоматически отправить ссылку входа, "
+            "напишите администратору.",
+            parse_mode=None,
+        )
+    except Exception:  # noqa: BLE001 — webhook всё равно должен обработать остальные действия
+        logger.exception("Не удалось отправить fallback-сообщение об оплате tg=%s тариф=%s", tg_id, tariff)
+    return False
 
 
 # ── Воронка ────────────────────────────────────────────────────────────────
@@ -217,11 +348,12 @@ async def on_button(call: CallbackQuery) -> None:
         route = ROUTES.get((int(si), int(bi), int(ki)))
     except (ValueError, KeyError):
         route = None
-    await call.answer()
 
     if route is None:
+        await call.answer()
         return
     if route.kind == "step":
+        await call.answer()
         await send_step(call.bot, call.message.chat.id, STEPS[route.target], track=True)
         await _emit(ingest.record_step_enter, call.message.chat.id, route.target,
                     uid=f"cq{call.id}",
@@ -229,14 +361,74 @@ async def on_button(call: CallbackQuery) -> None:
                     tariff_key=TARIFF_BY_INFO_STEP.get(route.target))
     elif route.kind == "pay":
         if SIMULATE_PAYMENT:  # тест без реальной оплаты → страница «Оплата прошла»
-            confirm = CONFIRM_STEP_BY_TARIFF.get(route.tariff)
-            if confirm is not None:
-                await send_step(call.bot, call.message.chat.id, STEPS[confirm], track=True)
+            await call.answer()
+            await _send_paid_confirmation(call.bot, call.message.chat.id, route.tariff or "")
         else:
             await call.answer(PAYMENT_PLACEHOLDER, show_alert=True)
     elif route.kind == "terminal":
-        title = _button_title(STEPS, int(si), int(bi), int(ki))
-        await _emit(ingest.record_applied, call.message.chat.id, int(si), title, uid=f"cq{call.id}")
+        step_index = int(si)
+        title = _button_title(STEPS, step_index, int(bi), int(ki))
+        tariff = _tariff_for_terminal_step(step_index)
+        approved = False
+        if tariff:
+            approved = await approve_join_request(call.bot, call.message.chat.id, tariff)
+            if approved:
+                await call.answer("Заявка одобрена ✅", show_alert=True)
+            else:
+                await call.answer(
+                    "Заявку отметили. Если доступ не открылся, напишите администратору.",
+                    show_alert=True,
+                )
+        else:
+            await call.answer("Готово ✅")
+        await _emit(ingest.record_applied, call.message.chat.id, step_index, title, uid=f"cq{call.id}")
+
+
+@dp.callback_query(F.data.startswith("paid_back:"))
+async def on_paid_back(call: CallbackQuery) -> None:
+    """Возврат с post-payment экрана: сообщение со ссылкой на канал остаётся в чате."""
+    try:
+        _, target = call.data.split(":", 1)
+        target_step = int(target)
+    except (AttributeError, ValueError):
+        target_step = PAID_BACK_TARGET_STEP
+    if not (0 <= target_step < len(STEPS)):
+        target_step = PAID_BACK_TARGET_STEP
+
+    await call.answer()
+    await send_step(call.bot, call.message.chat.id, STEPS[target_step], track=True)
+    await _emit(
+        ingest.record_step_enter,
+        call.message.chat.id,
+        target_step,
+        uid=f"cq{call.id}",
+        stage_key=STAGE_BY_STEP.get(target_step),
+        tariff_key=TARIFF_BY_INFO_STEP.get(target_step),
+    )
+
+
+@dp.chat_join_request()
+async def on_chat_join_request(request: ChatJoinRequest) -> None:
+    """Автоодобрение заявки в канал, если пользователь уже оплатил этот тариф."""
+    tariffs = tariffs_for_chat_id(request.chat.id)
+    tg_id = request.from_user.id
+    if not tariffs:
+        logger.warning("Заявка tg=%s в неизвестный канал %s — пропускаю", tg_id, request.chat.id)
+        return
+    paid_tariff = None
+    for tariff in tariffs:
+        if await asyncio.to_thread(_has_successful_payment, tg_id, tariff):
+            paid_tariff = tariff
+            break
+    if paid_tariff is None:
+        logger.info(
+            "Заявка tg=%s в канал %s без найденной оплаты по тарифам=%s — не одобряю",
+            tg_id,
+            request.chat.id,
+            ",".join(tariffs),
+        )
+        return
+    await approve_join_request(request.bot, tg_id, paid_tariff)
 
 
 # ── Служебные команды сверки контента ───────────────────────────────────────
@@ -290,7 +482,17 @@ async def _polling_forever(bot: Bot) -> None:
             await asyncio.sleep(10)
 
 
-def _record_payment(tariff: str, data: dict) -> None:
+def _parse_payment_amount(value) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    text = str(value).replace("\xa0", "").replace(" ", "").replace(",", ".")
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
+def _record_payment(tg_id: int, tariff: str, data: dict) -> None:
     """Записать оплату в озеро (best-effort). Идемпотентно по (provider, external_id=order_id).
 
     Озеро может быть не поднято локально — тогда просто пропускаем, ответ Prodamus важнее.
@@ -298,29 +500,73 @@ def _record_payment(tariff: str, data: dict) -> None:
     try:
         from datetime import datetime, timezone
 
+        from sqlalchemy import select
+
         from kontur.config import get_settings
         from kontur.db import make_engine, make_session_factory, upsert
-        from kontur.models import Payment
+        from kontur.models import Payment, Subscriber, Tariff
 
         engine = make_engine(get_settings().database_url)
         sf = make_session_factory(engine)
+        now = datetime.now(timezone.utc)
         order_id = str(data.get("order_id", ""))
-        amount = data.get("sum") or data.get("amount")
+        amount = _parse_payment_amount(data.get("sum") or data.get("amount"))
         with sf() as session:
+            sub, _ = upsert(
+                session,
+                Subscriber,
+                {"source_system": ingest.SOURCE_SYSTEM, "external_id": str(tg_id)},
+                {"tg_user_id": str(tg_id), "last_seen_at": now},
+            )
+            session.flush()
+            tariff_id = session.scalar(select(Tariff.id).where(Tariff.key == tariff))
             upsert(
                 session, Payment,
                 {"provider": "prodamus", "external_id": order_id},
                 {
-                    "amount": float(amount) if amount else None,
+                    "subscriber_id": sub.id,
+                    "tariff_id": tariff_id,
+                    "amount": amount,
                     "currency": str(data.get("currency", "rub")),
                     "status": "succeeded",
-                    "paid_at": datetime.now(timezone.utc),
+                    "paid_at": now,
+                    "source_id": sub.source_id,
                     "raw": data,
                 },
             )
             session.commit()
     except Exception:  # noqa: BLE001
         logger.exception("Не удалось записать оплату в озеро (тариф=%s) — пропускаю", tariff)
+
+
+def _has_successful_payment(tg_id: int, tariff: str) -> bool:
+    """Есть ли у пользователя успешная оплата тарифа в озере."""
+    try:
+        from sqlalchemy import select
+
+        from kontur.config import get_settings
+        from kontur.db import make_engine, make_session_factory
+        from kontur.models import Payment, Subscriber, Tariff
+
+        engine = make_engine(get_settings().database_url)
+        sf = make_session_factory(engine)
+        with sf() as session:
+            payment_id = session.scalar(
+                select(Payment.id)
+                .join(Subscriber, Subscriber.id == Payment.subscriber_id)
+                .join(Tariff, Tariff.id == Payment.tariff_id)
+                .where(
+                    Subscriber.source_system == ingest.SOURCE_SYSTEM,
+                    Subscriber.external_id == str(tg_id),
+                    Tariff.key == tariff,
+                    Payment.status == "succeeded",
+                )
+                .limit(1)
+            )
+            return payment_id is not None
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось проверить оплату tg=%s тариф=%s", tg_id, tariff)
+        return False
 
 
 async def _emit(fn, *args, **kwargs) -> None:
@@ -406,15 +652,24 @@ async def _run() -> None:
 
     async def on_paid(tg_id: int, tariff: str, data: dict) -> None:
         """Подтверждённая оплата: страница «оплачено» + доступ в канал + запись в озеро."""
-        confirm = CONFIRM_STEP_BY_TARIFF.get(tariff)
-        if confirm is not None:
-            await send_step(bot, tg_id, STEPS[confirm], track=True)
-        await grant_access(bot, tg_id, tariff)
-        _record_payment(tariff, data)
+        await asyncio.to_thread(_record_payment, tg_id, tariff, data)
         _amt = data.get("sum") or data.get("amount")
         await _emit(ingest.record_payment, tg_id, tariff, str(data.get("order_id", "")),
                     amount=float(_amt) if _amt else None,
                     currency=str(data.get("currency", "rub")), raw=data)
+        invite_link: str | None = None
+        try:
+            invite_link = await asyncio.wait_for(create_personal_invite(bot, tg_id, tariff), timeout=30)
+        except TimeoutError:
+            logger.exception("Таймаут создания инвайта tg=%s тариф=%s", tg_id, tariff)
+        except Exception:  # noqa: BLE001 — без инвайта покажем fallback со статической ссылкой
+            logger.exception("Не удалось создать инвайт tg=%s тариф=%s", tg_id, tariff)
+        try:
+            await asyncio.wait_for(_send_paid_confirmation(bot, tg_id, tariff, invite_link), timeout=75)
+        except TimeoutError:
+            logger.exception("Таймаут отправки страницы оплаты tg=%s тариф=%s", tg_id, tariff)
+        except Exception:  # noqa: BLE001 — подтверждение оплаты и запись в озеро уже не откатываем
+            logger.exception("Не удалось отправить страницу оплаты tg=%s тариф=%s", tg_id, tariff)
 
     if payments.configured():
         pay_mode = "Prodamus (ссылка с tg_id + вебхук)"
@@ -423,13 +678,20 @@ async def _run() -> None:
     else:
         pay_mode = "оплата-заглушка (Prodamus не настроен)"
     logger.info("Воронка готова: %s шагов, %s маршрутов (%s).", len(STEPS), len(ROUTES), pay_mode)
+    if payments.configured() and not payments.notification_url():
+        logger.warning(
+            "Prodamus настроен, но PUBLIC_BASE_URL пуст: платёжная ссылка будет без "
+            "urlNotification. Автоматическое сообщение после оплаты сработает только "
+            "если webhook вида https://...%s отдельно задан в кабинете Prodamus.",
+            payments.WEBHOOK_PATH,
+        )
 
     tasks = [_polling_forever(bot)]
     if payments.PRODAMUS_SECRET:
         port = int(os.getenv("PRODAMUS_WEBHOOK_PORT", "8081"))
         tasks.append(_serve_webhook(on_paid, port))
-        base = payments.PUBLIC_BASE_URL or "(PUBLIC_BASE_URL не задан — укажите адрес туннеля)"
-        logger.info("Приём оплат Prodamus: %s%s", base, payments.WEBHOOK_PATH)
+        notify_url = payments.notification_url() or "(PUBLIC_BASE_URL не задан — ссылка без urlNotification)"
+        logger.info("Приём оплат Prodamus: %s", notify_url)
 
     logger.info("Бот запущен. Откройте чат и отправьте /start.")
     await asyncio.gather(*tasks)
