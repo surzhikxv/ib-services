@@ -10,6 +10,7 @@ import os
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from kontur.automation import freshness_report
 from kontur.config import get_settings
 from kontur.connectors.tiktok.sync import TikTokConnector, tiktok_freshness
 from kontur.db import make_engine, make_session_factory
@@ -24,6 +25,12 @@ _session_factory = make_session_factory(_engine)
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health/connectors")
+def connector_health() -> dict:
+    """Freshness of scheduled and manual content sources, without credentials."""
+    return freshness_report(_session_factory)
 
 
 @app.post("/webhooks/{source}", include_in_schema=False)

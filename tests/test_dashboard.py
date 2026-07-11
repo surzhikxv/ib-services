@@ -78,7 +78,7 @@ def test_every_catalog_card_points_to_a_real_queryable_view():
     with factory() as s:
         for card in CARDS:
             assert card.view in VIEWS, f"{card.key}: неизвестная вьюха {card.view}"
-            assert card.display in {"scalar", "funnel", "bar", "row", "line"}, card.key
+            assert card.display in {"scalar", "funnel", "bar", "row", "line", "table"}, card.key
             _rows(factory, card.probe_sql)  # SQL карточки исполняется без ошибок
 
 

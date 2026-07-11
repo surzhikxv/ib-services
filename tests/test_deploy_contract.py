@@ -27,3 +27,13 @@ def test_compose_does_not_implicitly_build_production_image() -> None:
     compose = (ROOT / "docker-compose.yml").read_text()
 
     assert "build: ." not in compose
+
+
+def test_deploy_installs_connector_sync_timer() -> None:
+    deploy = (ROOT / "ops/deploy.sh").read_text()
+    service = (ROOT / "ops/kontur-sync.service").read_text()
+    timer = (ROOT / "ops/kontur-sync.timer").read_text()
+
+    assert "systemctl enable --now kontur-sync.timer" in deploy
+    assert "kontur.cli automation run" in service
+    assert "OnCalendar=" in timer

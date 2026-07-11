@@ -60,3 +60,28 @@ Metabase подключается к основной БД ролью `metabase_
 
 Версии PostgreSQL, n8n и Metabase закреплены digest-ами в `docker-compose.yml`.
 Обновлять их следует явно: backup → pull нового digest → smoke-test → замена pin.
+
+## Синхронизация и свежесть источников
+
+`kontur-sync.timer` просыпается дважды в сутки, около `03:20` и `15:20 UTC`
+(плюс случайный сдвиг до 10 минут). Один запуск:
+
+- обновляет Telegram-канал, если последнему успеху не меньше 10 часов;
+- обновляет VK и YouTube, если последнему успеху не меньше 20 часов;
+- повторяет временно упавший коннектор до трёх раз, не блокируя остальные;
+- контролирует ручной импорт TikTok, но не запускает его без свежего browser export;
+- пишет полную сводку в journald;
+- при заданном `SYNC_ALERT_CHAT_ID` отправляет проблемы в Telegram через текущего бота.
+
+Проверка и ручной запуск:
+
+```bash
+systemctl list-timers kontur-sync.timer --all
+systemctl start kontur-sync.service
+journalctl -u kontur-sync.service -n 150 --no-pager
+docker compose run --rm --no-deps app python -m kontur.cli automation status
+curl -fsS http://127.0.0.1:8000/health/connectors
+```
+
+Порог застоя: 18 часов для Telegram, 30 часов для VK/YouTube и 8 дней для
+ручного TikTok. Ошибка одного источника не отменяет попытки обновить остальные.

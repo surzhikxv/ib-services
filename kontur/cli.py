@@ -370,6 +370,26 @@ def _cmd_metabase_provision(args) -> int:
     return 0
 
 
+def _automation_factory():
+    engine = make_engine(get_settings().database_url)
+    init_db(engine)
+    return make_session_factory(engine)
+
+
+def _cmd_automation_status(args) -> int:
+    from kontur.automation import freshness_report
+
+    print(json.dumps(freshness_report(_automation_factory()), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_automation_run(args) -> int:
+    from kontur.automation import run_scheduled
+
+    code, _ = run_scheduled(_automation_factory())
+    return code
+
+
 def _make_llm():
     """Строит модель из настроек или возвращает None, если нет ключа."""
     from kontur.ai.llm import AnthropicLLM
@@ -499,6 +519,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     mb = sub.add_parser("metabase", help="дашборд Metabase").add_subparsers(dest="action", required=True)
     mb.add_parser("provision", help="создать источник, вопросы и дашборд").set_defaults(func=_cmd_metabase_provision)
+
+    automation = sub.add_parser("automation", help="расписание и свежесть коннекторов") \
+        .add_subparsers(dest="action", required=True)
+    automation.add_parser("status", help="показать свежесть источников") \
+        .set_defaults(func=_cmd_automation_status)
+    automation.add_parser("run", help="запустить только просроченные коннекторы") \
+        .set_defaults(func=_cmd_automation_run)
 
     ai = sub.add_parser("ai", help="ИИ-аналитик").add_subparsers(dest="action", required=True)
     rep = ai.add_parser("report", help="еженедельный разбор по данным")

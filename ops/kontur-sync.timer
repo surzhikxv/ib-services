@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Kontur content sources twice a day
+
+[Timer]
+OnCalendar=*-*-* 03,15:20:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+Unit=kontur-sync.service
+
+[Install]
+WantedBy=timers.target

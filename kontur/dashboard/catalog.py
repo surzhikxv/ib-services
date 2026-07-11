@@ -18,7 +18,7 @@ class Card:
     key: str
     name: str
     view: str
-    display: str  # scalar | funnel | bar | row | line
+    display: str  # scalar | funnel | bar | row | line | table
     metabase_sql: str
     description: str = ""
 
@@ -65,4 +65,11 @@ CARDS: list[Card] = [
          "SELECT date_trunc('week', paid_at) AS week, COUNT(*) AS payments, "
          "SUM(revenue) AS revenue FROM v_payments GROUP BY 1 ORDER BY 1",
          "Точное время оплаты добирается вебхуком Prodamus"),
+
+    # --- эксплуатация источников ---
+    Card("connector_freshness", "Свежесть источников", "v_connector_freshness", "table",
+         "SELECT connector, status, started_at, finished_at, "
+         "ROUND(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - COALESCE(finished_at, started_at))) / 3600, 1) "
+         "AS age_hours, error FROM v_connector_freshness ORDER BY connector",
+         "Последний запуск Telegram-канала, VK, YouTube и ручного импорта TikTok"),
 ]

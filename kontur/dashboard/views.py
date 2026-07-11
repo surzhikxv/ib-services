@@ -98,6 +98,22 @@ VIEWS: dict[str, str] = {
             (SELECT ROUND(100.0 * COUNT(DISTINCT subscriber_id) / NULLIF((SELECT COUNT(*) FROM subscribers), 0), 1)
                FROM payments)                                        AS conversion_pct
     """,
+    "v_connector_freshness": """
+        SELECT
+            sr.connector,
+            sr.status,
+            sr.started_at,
+            sr.finished_at,
+            sr.error
+        FROM sync_runs sr
+        JOIN (
+            SELECT connector, MAX(started_at) AS latest_started_at
+            FROM sync_runs
+            GROUP BY connector
+        ) latest
+          ON latest.connector = sr.connector
+         AND latest.latest_started_at = sr.started_at
+    """,
 }
 
 
