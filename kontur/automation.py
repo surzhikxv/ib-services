@@ -129,6 +129,28 @@ def _subprocess_runner(policy: ConnectorPolicy) -> CommandResult:
     return CommandResult(completed.returncode, output[-2000:])
 
 
+def _record_scheduler_failure(
+    session_factory: sessionmaker,
+    policy: ConnectorPolicy,
+    result: CommandResult,
+) -> None:
+    """Persist failures that happen before a connector can create its own SyncRun."""
+    now = datetime.now(tz=timezone.utc)
+    safe_tail = result.output.strip().splitlines()[-1][:500] if result.output.strip() else "no output"
+    with session_factory() as session:
+        session.add(
+            SyncRun(
+                connector=policy.connector,
+                status="error",
+                started_at=now,
+                finished_at=now,
+                error=f"scheduler exit {result.returncode}: {safe_tail}",
+                stats={"scheduler": True, "returncode": result.returncode},
+            )
+        )
+        session.commit()
+
+
 def _summary_text(report: dict, attempts: dict[str, list[dict]]) -> str:
     lines = [f"Контур роста: синхронизация {report['status']}"]
     for row in report["connectors"]:
@@ -178,6 +200,7 @@ def run_scheduled(
         if policy.mode != "scheduled" or not by_name[policy.connector]["due"]:
             continue
         attempts[policy.connector] = []
+        result = CommandResult(1, "not started")
         for attempt in range(1, 4):
             result = runner(policy)
             attempts[policy.connector].append(
@@ -187,6 +210,8 @@ def run_scheduled(
                 break
             if attempt < 3:
                 sleeper(5 * attempt)
+        if result.returncode != 0:
+            _record_scheduler_failure(session_factory, policy, result)
 
     report = freshness_report(session_factory, now=now, policies=policies)
     report["attempts"] = attempts

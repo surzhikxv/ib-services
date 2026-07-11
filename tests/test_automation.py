@@ -115,3 +115,23 @@ def test_scheduler_skips_recent_successes():
 
     assert code == 0
     assert report["attempts"] == {}
+
+
+def test_scheduler_persists_failure_before_connector_creates_run(monkeypatch):
+    factory = _factory()
+    policies = (ConnectorPolicy("youtube", ("youtube", "sync"), 20, 30),)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    code, report = run_scheduled(
+        factory,
+        now=NOW,
+        policies=policies,
+        runner=lambda _: CommandResult(2, "OAuth credentials rejected"),
+        sleeper=lambda _: None,
+    )
+
+    row = report["connectors"][0]
+    assert code == 1
+    assert row["last_status"] == "error"
+    assert row["has_error"] is True
+    assert row["due"] is True
