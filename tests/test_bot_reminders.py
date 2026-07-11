@@ -217,3 +217,142 @@ def test_reminder_button_opens_tariff_choice_and_records_step(monkeypatch):
             "tariff_key": None,
         },
     )]
+
+
+def test_due_review_chat_ids_waits_week_after_latest_payment_and_only_sends_once(tmp_path):
+    from bot.reminders import (
+        REVIEW_REMINDER_EVENT_TYPE,
+        due_review_chat_ids,
+    )
+    from kontur.db import init_db, make_engine, make_session_factory
+    from kontur.models import Event, Payment
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'kontur.sqlite'}")
+    init_db(engine)
+    sf = make_session_factory(engine)
+    now = datetime(2026, 7, 11, 12, tzinfo=timezone.utc)
+
+    with sf() as session:
+        due = _add_subscriber_with_event(session, 501, "bot_start", now - timedelta(days=20))
+        session.add(Payment(
+            subscriber_id=due.id,
+            status="succeeded",
+            provider="prodamus",
+            external_id="paid-501",
+            paid_at=now - timedelta(days=8),
+        ))
+
+        recent = _add_subscriber_with_event(session, 502, "bot_start", now - timedelta(days=20))
+        session.add(Payment(
+            subscriber_id=recent.id,
+            status="succeeded",
+            provider="prodamus",
+            external_id="paid-502-old",
+            paid_at=now - timedelta(days=10),
+        ))
+        session.add(Payment(
+            subscriber_id=recent.id,
+            status="succeeded",
+            provider="prodamus",
+            external_id="paid-502-upgrade",
+            paid_at=now - timedelta(days=2),
+        ))
+
+        reminded = _add_subscriber_with_event(session, 503, "bot_start", now - timedelta(days=20))
+        session.add(Payment(
+            subscriber_id=reminded.id,
+            status="succeeded",
+            provider="prodamus",
+            external_id="paid-503",
+            paid_at=now - timedelta(days=9),
+        ))
+        session.add(Event(
+            subscriber_id=reminded.id,
+            event_type=REVIEW_REMINDER_EVENT_TYPE,
+            occurred_at=now - timedelta(days=1),
+            source_system="telegram_bot",
+            dedup_key="tg503:review_reminder",
+        ))
+
+        event_only = _add_subscriber_with_event(
+            session, 504, "bot_start", now - timedelta(days=20)
+        )
+        session.add(Event(
+            subscriber_id=event_only.id,
+            event_type="payment",
+            occurred_at=now - timedelta(days=7, minutes=1),
+            source_system="telegram_bot",
+            dedup_key="tg504:payment:event-only",
+        ))
+        session.commit()
+
+    assert due_review_chat_ids(now=now, session_factory=sf) == [501, 504]
+
+
+def test_send_due_review_reminders_uses_exact_copy_and_channel_url(monkeypatch):
+    from bot import reminders
+
+    sent = []
+    recorded = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, **kwargs):
+            sent.append((chat_id, text, kwargs))
+
+    monkeypatch.setattr(reminders, "due_review_chat_ids", lambda **_kwargs: [601])
+    monkeypatch.setattr(
+        reminders,
+        "record_review_reminder_sent",
+        lambda tg_id, **_kwargs: recorded.append(tg_id),
+    )
+
+    count = asyncio.run(reminders.send_due_review_reminders(
+        FakeBot(), now=datetime(2026, 7, 11, 12, tzinfo=timezone.utc)
+    ))
+
+    assert count == 1
+    assert recorded == [601]
+    chat_id, text, kwargs = sent[0]
+    assert chat_id == 601
+    assert text == "Понравился курс?\n\nБудем рады твоему отзыву."
+    assert kwargs["parse_mode"] is None
+    button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Оставить отзыв"
+    assert button.url == "https://t.me/+sRRY-p-cVNRiN2Zi"
+
+
+def test_record_review_reminder_makes_request_one_time(tmp_path):
+    from sqlalchemy import select
+
+    from bot.reminders import (
+        REVIEW_REMINDER_EVENT_TYPE,
+        due_review_chat_ids,
+        record_review_reminder_sent,
+    )
+    from kontur.db import init_db, make_engine, make_session_factory
+    from kontur.models import Event, Payment
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'kontur.sqlite'}")
+    init_db(engine)
+    sf = make_session_factory(engine)
+    now = datetime(2026, 7, 11, 12, tzinfo=timezone.utc)
+    with sf() as session:
+        sub = _add_subscriber_with_event(session, 701, "bot_start", now - timedelta(days=20))
+        session.add(Payment(
+            subscriber_id=sub.id,
+            status="succeeded",
+            provider="prodamus",
+            external_id="paid-701",
+            paid_at=now - timedelta(days=8),
+        ))
+        session.commit()
+
+    assert due_review_chat_ids(now=now, session_factory=sf) == [701]
+    record_review_reminder_sent(701, sent_at=now, session_factory=sf)
+    assert due_review_chat_ids(now=now + timedelta(days=30), session_factory=sf) == []
+
+    with sf() as session:
+        event = session.scalar(select(Event).where(
+            Event.event_type == REVIEW_REMINDER_EVENT_TYPE
+        ))
+        assert event.raw == {"url": "https://t.me/+sRRY-p-cVNRiN2Zi"}
