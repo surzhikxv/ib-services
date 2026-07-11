@@ -128,7 +128,7 @@ def test_manifest_rejects_partial_or_shrinking_capture():
 
     full = CaptureManifest(
         batch_id="batch-full",
-        script_version="3.0",
+        script_version="3.1",
         expected_videos=3,
         catalog_videos=3,
         insight_videos=1,
@@ -143,7 +143,7 @@ def test_manifest_rejects_partial_or_shrinking_capture():
 
     one = CaptureManifest(
         batch_id="batch-one",
-        script_version="3.0",
+        script_version="3.1",
         expected_videos=1,
         catalog_videos=0,
         insight_videos=1,
@@ -160,7 +160,7 @@ def test_manifest_rejects_partial_or_shrinking_capture():
 
     partial = CaptureManifest(
         batch_id="batch-partial",
-        script_version="3.0",
+        script_version="3.1",
         expected_videos=1,
         catalog_videos=0,
         insight_videos=1,
@@ -173,6 +173,49 @@ def test_manifest_rejects_partial_or_shrinking_capture():
             snapshot_date=SNAP,
             manifest=partial,
         ).run(factory)
+
+
+def test_manifest_requires_terminal_catalog_page():
+    factory = _factory()
+    catalog = {
+        "url": ITEM_LIST_CALL["url"],
+        "json": {
+            **ITEM_LIST_CALL["json"],
+            "item_list": [ITEM_LIST_CALL["json"]["item_list"][0]],
+            "has_more": True,
+        },
+    }
+    manifest = CaptureManifest(
+        batch_id="batch-no-terminal",
+        script_version="3.1",
+        expected_videos=1,
+        catalog_videos=1,
+        insight_videos=1,
+        complete=True,
+    )
+    with pytest.raises(TikTokCaptureRejected, match="каталог не дочитан"):
+        TikTokConnector(
+            capture=[OVERVIEW_CALL, AUDIENCE_CALL, catalog],
+            snapshot_date=SNAP,
+            manifest=manifest,
+        ).run(factory)
+
+    catalog["json"]["has_more"] = False
+    manifest = CaptureManifest(
+        batch_id="batch-terminal",
+        script_version="3.1",
+        expected_videos=1,
+        catalog_videos=1,
+        insight_videos=1,
+        complete=True,
+    )
+    stats = TikTokConnector(
+        capture=[OVERVIEW_CALL, AUDIENCE_CALL, catalog],
+        snapshot_date=SNAP,
+        manifest=manifest,
+    ).run(factory)
+    assert stats["catalog_complete"] is True
+    assert stats["catalog_pages"] == 1
 
 
 def test_overview_only_mode_with_explicit_channel():

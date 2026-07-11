@@ -32,7 +32,7 @@ from kontur.models import Channel, ChannelMetric, Content, ContentMetric, RawRec
 #: данные TikTok считаются «свежими», если успешный sync был не давнее N часов
 TIKTOK_STALE_HOURS = 24 * 8  # недельная каденция + буфер
 TIKTOK_OVERVIEW_STALE_HOURS = 24 * 35
-MIN_CAPTURE_SCRIPT_VERSION = (3, 0)
+MIN_CAPTURE_SCRIPT_VERSION = (3, 1)
 
 
 class TikTokCaptureRejected(ValueError):
@@ -79,16 +79,42 @@ def _capture_counts(by_aweme: dict[str, dict], pinned_ids: set[str]) -> dict[str
     }
 
 
+def _catalog_capture_state(capture: list[dict]) -> dict[str, int | bool]:
+    """Prove that browser capture contains the terminal item_list page."""
+    pages = 0
+    terminal = False
+    for entry in capture:
+        url = entry.get("url", "")
+        body = entry.get("json")
+        if "creator/manage/item_list" not in url or not isinstance(body, dict):
+            continue
+        items = body.get("item_list")
+        if not isinstance(items, list):
+            continue
+        pages += 1
+        has_more = body.get("has_more", body.get("hasMore"))
+        if has_more in (False, 0, "0"):
+            terminal = True
+            continue
+        # Fallback for response variants without has_more: a short page relative
+        # to the requested count is terminal.
+        requested = re.search(r"[?&]count=(\d+)", url)
+        if has_more is None and requested and len(items) < int(requested.group(1)):
+            terminal = True
+    return {"catalog_pages": pages, "catalog_complete": terminal}
+
+
 def validate_capture_manifest(
     manifest: CaptureManifest,
     by_aweme: dict[str, dict],
     pinned_ids: set[str],
     *,
     baseline_videos: int,
+    catalog_complete: bool,
 ) -> dict[str, int]:
     counts = _capture_counts(by_aweme, pinned_ids)
     if _version(manifest.script_version) < MIN_CAPTURE_SCRIPT_VERSION:
-        raise TikTokCaptureRejected("обнови userscript до версии 3.0 или новее")
+        raise TikTokCaptureRejected("обнови userscript до версии 3.1 или новее")
     if not manifest.complete:
         raise TikTokCaptureRejected("браузер не подтвердил завершение всей партии")
     if not manifest.batch_id or len(manifest.batch_id) > 100:
@@ -118,6 +144,11 @@ def validate_capture_manifest(
     if covered != manifest.expected_videos:
         raise TikTokCaptureRejected(
             "не все публикации подтверждены каталогом или явным списком закрепов"
+        )
+    if manifest.catalog_videos and not catalog_complete:
+        raise TikTokCaptureRejected(
+            "каталог не дочитан до последней страницы; перезагрузи «Публикации» "
+            "и промотай список до конца"
         )
     if baseline_videos and manifest.expected_videos < baseline_videos and not manifest.allow_catalog_shrink:
         raise TikTokCaptureRejected(
@@ -204,6 +235,7 @@ class TikTokConnector(Connector):
             select(func.count(Content.id)).where(Content.channel_id == channel_id)
         ) or 0
         counts = _capture_counts(by_aweme, self._pinned_ids)
+        catalog_state = _catalog_capture_state(self._capture)
         if self._capture:
             if self._manifest:
                 counts = validate_capture_manifest(
@@ -211,6 +243,7 @@ class TikTokConnector(Connector):
                     by_aweme,
                     self._pinned_ids,
                     baseline_videos=baseline_videos,
+                    catalog_complete=bool(catalog_state["catalog_complete"]),
                 )
                 stats.update(
                     batch_id=self._manifest.batch_id,
@@ -227,6 +260,7 @@ class TikTokConnector(Connector):
                     catalog_videos=counts["catalog_videos"],
                 )
             stats.update(counts)
+            stats.update(catalog_state)
             stats["baseline_videos"] = baseline_videos
             # Только browser batch v3 несёт проверяемое ожидание полного каталога.
             # Legacy/CLI capture остаётся полезным импортом, но не делает health зелёным.

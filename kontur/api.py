@@ -100,7 +100,7 @@ def ingest_tiktok(payload: TikTokIngest, x_kontur_token: str | None = Header(def
             payload.complete,
         )
         if any(value is None for value in required):
-            raise HTTPException(status_code=409, detail="обнови TikTok userscript до версии 3.0")
+            raise HTTPException(status_code=409, detail="обнови TikTok userscript до версии 3.1")
         manifest = CaptureManifest(
             batch_id=payload.batch_id or "",
             script_version=payload.script_version or "",

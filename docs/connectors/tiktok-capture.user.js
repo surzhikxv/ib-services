@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Контур — TikTok Studio capture
 // @namespace    kontur.rosta
-// @version      3.0
+// @version      3.1
 // @description  Пассивно сохраняет ответы TikTok Studio и последовательно открывает аналитику публикаций с фиксированным лимитом, ручными паузами и стопом при защитной проверке.
 // @match        https://www.tiktok.com/tiktokstudio/*
 // @run-at       document-start
@@ -14,7 +14,7 @@
 // ==/UserScript==
 
 /*
- Версия 3.0 не подделывает запросы, подписи, заголовки или поведение пользователя.
+ Версия 3.1 не подделывает запросы, подписи, заголовки или поведение пользователя.
  Она только читает ответы, которые загрузил TikTok Studio, и открывает штатные
  страницы аналитики в одной вкладке. Между страницами — не менее 15 секунд;
  каждые 20 публикаций требуется ручное продолжение. При 401/403/429, CAPTCHA,
@@ -29,7 +29,7 @@
   'use strict';
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const SCRIPT_VERSION = '3.0';
+  const SCRIPT_VERSION = '3.1';
   const PAGE_DELAY_MS = 15000;
   const PAUSE_EVERY_STEPS = 60; // 3 страницы × 20 публикаций
   const OWNER_TTL_MS = 60000;
@@ -43,7 +43,7 @@
     ep: 'k_ep', tok: 'k_tok', hb: 'k_hb', pins: 'k3_pins', batch: 'k3_batch',
     expected: 'k3_expected', visited: 'k3_visited', nextPause: 'k3_next_pause',
     owner: 'k3_owner', safety: 'k3_safety', overview: 'k3_overview',
-    overviewName: 'k3_overview_name', year: 'k3_overview_year',
+    overviewName: 'k3_overview_name', year: 'k3_overview_year', notice: 'k3_notice',
   };
 
   let el;
@@ -158,16 +158,25 @@
     paint();
   }
 
-  function catalogIds() {
+  function catalogState() {
     const ids = new Set();
+    let pages = 0;
+    let complete = false;
     Object.values(getJSON(K.cap, {})).forEach((entry) => {
       if (!entry || !isItemList(entry.url || '') || !entry.json || !Array.isArray(entry.json.item_list)) return;
+      pages++;
       entry.json.item_list.forEach((item) => {
         if (item && item.item_id) ids.add(String(item.item_id));
       });
+      const hasMore = entry.json.has_more ?? entry.json.hasMore;
+      if (hasMore === false || hasMore === 0 || hasMore === '0') complete = true;
+      const requested = /[?&]count=(\d+)/.exec(entry.url || '');
+      if (hasMore == null && requested && entry.json.item_list.length < Number(requested[1])) complete = true;
     });
-    return ids;
+    return { ids, pages, complete };
   }
+
+  function catalogIds() { return catalogState().ids; }
 
   function insightIds() {
     const ids = new Set();
@@ -333,9 +342,14 @@
       status('Короткие ссылки не поддержаны: открой их и вставь полный URL /video/<id>.');
       return;
     }
+    const catalog = catalogState();
     const ids = [...allIds()];
     if (!ids.length) {
       status('Видео не найдены. Промотай «Публикации» до конца и нажми «Проверить».');
+      return;
+    }
+    if (catalog.ids.size && !catalog.complete) {
+      status('Старт заблокирован: поймано ' + catalog.pages + ' страниц каталога, но последняя страница не получена. Нажми «Новый сбор», дождись перезагрузки и промотай список один раз до конца.');
       return;
     }
     if (!claimOwner()) {
@@ -366,6 +380,14 @@
   }
 
   function finishWalk() {
+    const catalog = catalogState();
+    if (catalog.ids.size && !catalog.complete) {
+      GM_setValue(K.mode, 'paused');
+      releaseOwner();
+      status('Сбор остановлен: нет подтверждения последней страницы каталога. Начни новый сбор со страницы «Публикации».');
+      paint();
+      return;
+    }
     const expected = new Set(getJSON(K.expected, []));
     const current = allIds();
     current.forEach((id) => expected.add(id));
@@ -415,6 +437,8 @@
     if (GM_getValue(K.safety, '')) return 'активен защитный стоп';
     if (!body.batch_id) return 'нет batch_id — начни новый сбор';
     if (!body.capture.length || !body.expected_videos) return 'буфер пуст';
+    const catalog = catalogState();
+    if (catalog.ids.size && !catalog.complete) return 'нет последней страницы каталога';
     if (getJSON(K.queue, []).length || GM_getValue(K.mode, 'idle') === 'walking') return 'обход ещё не завершён';
     if (body.insight_videos !== body.expected_videos) {
       return 'полная аналитика есть только для ' + body.insight_videos + ' из ' + body.expected_videos;
@@ -489,8 +513,10 @@
       K.overview, K.overviewName, K.year].forEach(GM_deleteValue);
     GM_setValue(K.mode, 'idle');
     ensureBatch();
-    status('Новый сбор начат. Теперь вручную промотай «Публикации» до конца.');
+    GM_setValue(K.notice, 'Новый пустой сбор. Дождись загрузки «Публикаций» и промотай список один раз до конца.');
+    status('Очищаю кэш сбора и перезагружаю страницу…');
     paint();
+    setTimeout(() => location.reload(), 250);
   }
 
   function stopWalk() {
@@ -518,7 +544,7 @@
 
   function paint() {
     if (!el) return;
-    const catalog = catalogIds();
+    const catalog = catalogState();
     const insights = insightIds();
     const total = allIds();
     const queue = getJSON(K.queue, []);
@@ -526,7 +552,8 @@
     const heartbeat = GM_getValue(K.hb, '—');
     const overview = GM_getValue(K.overviewName, 'нет');
     el.querySelector('#k-n').textContent =
-      'каталог ' + catalog.size + ' · всего ' + total.size + ' · аналитика ' + insights.size +
+      'каталог ' + catalog.ids.size + ' · страниц ' + catalog.pages + ' · конец ' + (catalog.complete ? 'да' : 'нет') +
+      ' · всего ' + total.size + ' · аналитика ' + insights.size +
       ' · очередь ' + queue.length + ' · режим ' + mode + ' · Overview ' + overview +
       ' · залито ' + heartbeat;
   }
@@ -535,7 +562,7 @@
     el = document.createElement('div');
     el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483647;background:#111;color:#fff;font:12px/1.4 -apple-system,sans-serif;padding:10px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);width:340px;opacity:.96';
     el.innerHTML =
-      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok v3</div>' +
+      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok v3.1</div>' +
       '<div id="k-n" style="color:#7fd;margin-bottom:6px;word-break:break-word">—</div>' +
       '<input id="k-ep" placeholder="Endpoint /ingest/tiktok" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
       '<input id="k-tok" type="password" placeholder="Token" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
@@ -564,9 +591,10 @@
     el.querySelector('#k-new').onclick = newBatch;
     el.querySelector('#k-dry').onclick = () => {
       const parsed = savePins();
+      const catalog = catalogState();
       const count = allIds().size;
       status(count
-        ? 'Найдено ' + count + ' публикаций (каталог ' + catalogIds().size + ', закрепы ' + getJSON(K.pins, []).length + '). Сверь с TikTok перед стартом.' + (parsed.rejected ? ' Не распознано значений: ' + parsed.rejected + '.' : '')
+        ? 'Найдено ' + count + ' публикаций (каталог ' + catalog.ids.size + ', страниц ' + catalog.pages + ', конец: ' + (catalog.complete ? 'да' : 'НЕТ') + ', закрепы ' + getJSON(K.pins, []).length + ').' + (catalog.complete ? ' Сверь число с TikTok перед стартом.' : ' Нельзя стартовать: нажми «Новый сбор» на странице «Публикации» и после перезагрузки промотай до конца.') + (parsed.rejected ? ' Не распознано значений: ' + parsed.rejected + '.' : '')
         : 'Каталог пуст. Вручную промотай «Публикации» до конца.');
       paint();
     };
@@ -580,6 +608,11 @@
 
   function boot() {
     mountUI();
+    const notice = GM_getValue(K.notice, '');
+    if (notice) {
+      GM_deleteValue(K.notice);
+      status(notice);
+    }
     if (!checkPageSafety()) return;
     if (GM_getValue(K.mode, 'idle') === 'walking') {
       if (!claimOwner()) {

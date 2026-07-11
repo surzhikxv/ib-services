@@ -35,7 +35,7 @@ def _complete_capture(factory):
         snapshot_date=SNAP,
         manifest=CaptureManifest(
             batch_id="batch-complete",
-            script_version="3.0",
+            script_version="3.1",
             expected_videos=1,
             catalog_videos=0,
             insight_videos=1,
