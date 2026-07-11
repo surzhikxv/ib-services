@@ -76,6 +76,8 @@ obsolete = {
 }
 result = []
 for line in path.read_text(encoding="utf-8").splitlines():
+    if line.lstrip().startswith("#") and prefix.lower() in line.lower():
+        continue
     key, separator, value = line.partition("=")
     if separator and key in obsolete:
         continue
