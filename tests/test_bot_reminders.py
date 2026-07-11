@@ -314,7 +314,7 @@ def test_send_due_review_reminders_uses_exact_copy_and_channel_url(monkeypatch):
     assert recorded == [601]
     chat_id, text, kwargs = sent[0]
     assert chat_id == 601
-    assert text == "Понравился курс?\n\nБудем рады твоему отзыву."
+    assert text == "Понравился курс?\n\nБудем рады твоему отзыву 😊"
     assert kwargs["parse_mode"] is None
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Оставить отзыв"

@@ -26,7 +26,7 @@ REMINDER_CALLBACK = "reminder:tariffs"
 DEFAULT_INTERVAL = timedelta(hours=48)
 REVIEW_REMINDER_EVENT_TYPE = "review_reminder"
 REVIEW_REMINDER_DELAY = timedelta(days=7)
-REVIEW_REMINDER_TEXT = "Понравился курс?\n\nБудем рады твоему отзыву."
+REVIEW_REMINDER_TEXT = "Понравился курс?\n\nБудем рады твоему отзыву 😊"
 REVIEW_REMINDER_BUTTON = "Оставить отзыв"
 REVIEW_CHANNEL_URL = "https://t.me/+sRRY-p-cVNRiN2Zi"
 _FACTORY: sessionmaker | None = None
