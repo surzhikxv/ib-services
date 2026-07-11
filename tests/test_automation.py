@@ -24,7 +24,7 @@ def _factory():
     return make_session_factory(engine)
 
 
-def _run(factory, connector: str, *, status="ok", age_hours=1, error=None):
+def _run(factory, connector: str, *, status="ok", age_hours=1, error=None, stats=None):
     finished = NOW - timedelta(hours=age_hours)
     with factory() as session:
         session.add(
@@ -34,6 +34,7 @@ def _run(factory, connector: str, *, status="ok", age_hours=1, error=None):
                 started_at=finished - timedelta(minutes=2),
                 finished_at=finished,
                 error=error,
+                stats=stats,
             )
         )
         session.commit()
@@ -65,6 +66,21 @@ def test_manual_source_is_monitored_but_never_due():
 
     assert row["stale"] is True
     assert row["due"] is False
+
+
+def test_tiktok_partial_success_does_not_make_health_green():
+    factory = _factory()
+    policy = (ConnectorPolicy("tiktok", (), 0, 192, mode="manual"),)
+    _run(
+        factory,
+        "tiktok",
+        age_hours=1,
+        stats={"videos": 3, "expected_videos": 100, "capture_complete": False},
+    )
+
+    row = freshness_report(factory, now=NOW, policies=policy)["connectors"][0]
+    assert row["stale"] is True
+    assert row["last_success_at"] is None
 
 
 def test_scheduler_retries_one_connector_and_continues_with_the_next(monkeypatch):

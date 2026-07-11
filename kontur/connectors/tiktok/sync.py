@@ -11,9 +11,11 @@
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from kontur.connectors.base import Connector
@@ -25,10 +27,120 @@ from kontur.connectors.tiktok.mapping import (
 )
 from kontur.connectors.tiktok.reader import parse_capture, parse_overview
 from kontur.db import upsert
-from kontur.models import Channel, ChannelMetric, Content, ContentMetric, SyncRun
+from kontur.models import Channel, ChannelMetric, Content, ContentMetric, RawRecord, SyncRun
 
 #: данные TikTok считаются «свежими», если успешный sync был не давнее N часов
 TIKTOK_STALE_HOURS = 24 * 8  # недельная каденция + буфер
+TIKTOK_OVERVIEW_STALE_HOURS = 24 * 35
+MIN_CAPTURE_SCRIPT_VERSION = (3, 0)
+
+
+class TikTokCaptureRejected(ValueError):
+    """The browser capture is incomplete or comes from an obsolete uploader."""
+
+
+@dataclass(frozen=True)
+class CaptureManifest:
+    batch_id: str
+    script_version: str
+    expected_videos: int
+    catalog_videos: int
+    insight_videos: int
+    complete: bool
+    allow_catalog_shrink: bool = False
+
+
+def _version(value: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", value or "")
+    return tuple(int(part) for part in parts[:3])
+
+
+def _deep_merge(old: dict | None, new: dict | None) -> dict:
+    """Merge sparse TikTok responses without erasing previously captured fields."""
+    result = dict(old or {})
+    for key, value in (new or {}).items():
+        if value in (None, {}, []):
+            continue
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _capture_counts(by_aweme: dict[str, dict], pinned_ids: set[str]) -> dict[str, int]:
+    catalog = {aid for aid, merged in by_aweme.items() if merged.get("_catalog")}
+    insight = {aid for aid, merged in by_aweme.items() if merged.get("video_info")}
+    return {
+        "videos": len(by_aweme),
+        "catalog_videos": len(catalog),
+        "insight_videos": len(insight),
+        "pinned_videos": len(pinned_ids),
+    }
+
+
+def validate_capture_manifest(
+    manifest: CaptureManifest,
+    by_aweme: dict[str, dict],
+    pinned_ids: set[str],
+    *,
+    baseline_videos: int,
+) -> dict[str, int]:
+    counts = _capture_counts(by_aweme, pinned_ids)
+    if _version(manifest.script_version) < MIN_CAPTURE_SCRIPT_VERSION:
+        raise TikTokCaptureRejected("обнови userscript до версии 3.0 или новее")
+    if not manifest.complete:
+        raise TikTokCaptureRejected("браузер не подтвердил завершение всей партии")
+    if not manifest.batch_id or len(manifest.batch_id) > 100:
+        raise TikTokCaptureRejected("некорректный batch_id")
+    if manifest.expected_videos <= 0:
+        raise TikTokCaptureRejected("ожидаемое число публикаций должно быть больше нуля")
+    if counts["videos"] != manifest.expected_videos:
+        raise TikTokCaptureRejected(
+            f"неполная партия: ожидалось {manifest.expected_videos}, получено {counts['videos']}"
+        )
+    if counts["catalog_videos"] != manifest.catalog_videos:
+        raise TikTokCaptureRejected(
+            "число публикаций каталога не совпало с манифестом браузера"
+        )
+    if counts["insight_videos"] != manifest.insight_videos:
+        raise TikTokCaptureRejected(
+            "число полностью обойдённых публикаций не совпало с манифестом браузера"
+        )
+    if manifest.insight_videos != manifest.expected_videos:
+        raise TikTokCaptureRejected(
+            f"богатая аналитика собрана не для всех публикаций: "
+            f"{manifest.insight_videos} из {manifest.expected_videos}"
+        )
+    covered = counts["catalog_videos"] + len(pinned_ids - {
+        aid for aid, merged in by_aweme.items() if merged.get("_catalog")
+    })
+    if covered != manifest.expected_videos:
+        raise TikTokCaptureRejected(
+            "не все публикации подтверждены каталогом или явным списком закрепов"
+        )
+    if baseline_videos and manifest.expected_videos < baseline_videos and not manifest.allow_catalog_shrink:
+        raise TikTokCaptureRejected(
+            f"каталог уменьшился с {baseline_videos} до {manifest.expected_videos}; "
+            "сначала подтверди удалённые публикации"
+        )
+    return counts
+
+
+def _capture_run_complete(run: SyncRun) -> bool:
+    stats = run.stats or {}
+    expected = stats.get("expected_videos")
+    return bool(
+        stats.get("capture_complete") is True
+        and isinstance(expected, int)
+        and expected > 0
+        and stats.get("videos") == expected
+    )
+
+
+def _overview_run_complete(run: SyncRun) -> bool:
+    stats = run.stats or {}
+    return bool(stats.get("overview_complete") is True and (stats.get("channel_days") or 0) > 0)
 
 
 class TikTokConnector(Connector):
@@ -44,6 +156,7 @@ class TikTokConnector(Connector):
         channel_title: str | None = None,
         pinned_ids: set[str] | None = None,
         snapshot_date=None,
+        manifest: CaptureManifest | None = None,
     ):
         self._capture = capture or []
         self._overview = overview
@@ -52,9 +165,17 @@ class TikTokConnector(Connector):
         self._pinned_ids = pinned_ids or set()
         self._channel_title = channel_title
         self._snapshot_date = snapshot_date
+        self._manifest = manifest
 
     def ingest(self, session: Session, run: SyncRun, stats: dict) -> None:
-        stats.update(channel=0, videos=0, metrics=0, channel_days=0)
+        stats.update(
+            channel=0,
+            videos=0,
+            metrics=0,
+            channel_days=0,
+            capture_complete=False,
+            overview_complete=False,
+        )
         snap = self._snapshot_date or datetime.now(tz=timezone.utc).date()
 
         author, by_aweme = parse_capture(self._capture, pinned_ids=self._pinned_ids)
@@ -79,25 +200,100 @@ class TikTokConnector(Connector):
         channel_id = channel.id
         stats["channel"] = 1
 
+        baseline_videos = session.scalar(
+            select(func.count(Content.id)).where(Content.channel_id == channel_id)
+        ) or 0
+        counts = _capture_counts(by_aweme, self._pinned_ids)
+        if self._capture:
+            if self._manifest:
+                counts = validate_capture_manifest(
+                    self._manifest,
+                    by_aweme,
+                    self._pinned_ids,
+                    baseline_videos=baseline_videos,
+                )
+                stats.update(
+                    batch_id=self._manifest.batch_id,
+                    script_version=self._manifest.script_version,
+                    expected_videos=self._manifest.expected_videos,
+                    catalog_videos=self._manifest.catalog_videos,
+                    insight_videos=self._manifest.insight_videos,
+                )
+            else:
+                stats.update(
+                    batch_id="cli",
+                    script_version="cli",
+                    expected_videos=counts["videos"],
+                    catalog_videos=counts["catalog_videos"],
+                )
+            stats.update(counts)
+            stats["baseline_videos"] = baseline_videos
+            # Только browser batch v3 несёт проверяемое ожидание полного каталога.
+            # Legacy/CLI capture остаётся полезным импортом, но не делает health зелёным.
+            stats["capture_complete"] = bool(
+                self._manifest and counts["videos"] == stats["expected_videos"] > 0
+            )
+
         # 2. Видео → Content + ContentMetric (снимок на дату прогона).
         unique = (cv.get("meta") or {}).get("unique_id")
         for aid, merged in by_aweme.items():
-            self._land_raw(session, "video", str(aid), merged, run)
+            existing_raw = session.scalar(
+                select(RawRecord).where(
+                    RawRecord.source_system == self.name,
+                    RawRecord.entity_type == "video",
+                    RawRecord.external_id == str(aid),
+                )
+            )
+            self._land_raw(
+                session,
+                "video",
+                str(aid),
+                _deep_merge(existing_raw.payload if existing_raw else None, merged),
+                run,
+            )
             c = content_values(aid, merged, unique=unique)
+            existing_content = session.scalar(
+                select(Content).where(
+                    Content.channel_id == channel_id,
+                    Content.external_id == c["external_id"],
+                )
+            )
+            content_metrics = _deep_merge(
+                existing_content.metrics if existing_content else None,
+                c["metrics"],
+            )
             content, _ = upsert(
                 session, Content,
                 {"channel_id": channel_id, "external_id": c["external_id"]},
                 {
-                    "type": c["type"], "title": c["title"], "url": c["url"],
-                    "published_at": c["published_at"], "metrics": c["metrics"],
-                    "raw": c["raw"], "last_seen_run_id": run.id,
+                    "type": c["type"] or (existing_content.type if existing_content else None),
+                    "title": c["title"] or (existing_content.title if existing_content else None),
+                    "url": c["url"] or (existing_content.url if existing_content else None),
+                    "published_at": c["published_at"] or (
+                        existing_content.published_at if existing_content else None
+                    ),
+                    "metrics": content_metrics,
+                    "raw": _deep_merge(existing_content.raw if existing_content else None, c["raw"]),
+                    "last_seen_run_id": run.id,
                 },
             )
             session.flush()
+            incoming_metric = metric_values(merged)
+            existing_metric = session.scalar(
+                select(ContentMetric).where(
+                    ContentMetric.content_id == content.id,
+                    ContentMetric.snapshot_date == snap,
+                )
+            )
+            if existing_metric:
+                for field in ("views", "reach", "likes", "comments", "shares", "saves"):
+                    if incoming_metric.get(field) is None:
+                        incoming_metric[field] = getattr(existing_metric, field)
+                incoming_metric["raw"] = _deep_merge(existing_metric.raw, incoming_metric.get("raw"))
             upsert(
                 session, ContentMetric,
                 {"content_id": content.id, "snapshot_date": snap},
-                metric_values(merged),
+                incoming_metric,
             )
         stats["videos"] = stats["metrics"] = len(by_aweme)
 
@@ -113,23 +309,58 @@ class TikTokConnector(Connector):
                     channel_metric_values(r),
                 )
             stats["channel_days"] = len(rows)
+            if not rows:
+                raise TikTokCaptureRejected("Overview.csv не содержит распознаваемых строк")
+            stats["overview_complete"] = True
 
 
-def tiktok_freshness(session_factory: sessionmaker, *, now=None,
-                     stale_hours: int = TIKTOK_STALE_HOURS) -> dict:
-    """Возраст последнего успешного TikTok-sync (для health-алерта о застое данных)."""
+def tiktok_freshness(
+    session_factory: sessionmaker,
+    *,
+    now=None,
+    stale_hours: int = TIKTOK_STALE_HOURS,
+    overview_stale_hours: int = TIKTOK_OVERVIEW_STALE_HOURS,
+) -> dict:
+    """Freshness of the last complete capture and the last valid Overview import."""
     now = now or datetime.now(tz=timezone.utc)
     with session_factory() as session:
-        run = session.scalars(
+        runs = session.scalars(
             select(SyncRun)
             .where(SyncRun.connector == "tiktok", SyncRun.status == "ok")
             .order_by(SyncRun.finished_at.desc())
-        ).first()
-        finished = run.finished_at if run else None
-    if finished is None:
-        return {"last_run": None, "age_hours": None, "stale": True}
-    if finished.tzinfo is None:
-        finished = finished.replace(tzinfo=timezone.utc)
-    age_hours = (now - finished).total_seconds() / 3600
-    return {"last_run": finished.isoformat(), "age_hours": round(age_hours, 1),
-            "stale": age_hours > stale_hours}
+            .limit(500)
+        ).all()
+        latest = session.scalar(
+            select(SyncRun).where(SyncRun.connector == "tiktok").order_by(SyncRun.id.desc()).limit(1)
+        )
+    capture_run = next((run for run in runs if _capture_run_complete(run)), None)
+    overview_run = next((run for run in runs if _overview_run_complete(run)), None)
+
+    def age(run):
+        if not run:
+            return None, None
+        finished = run.finished_at or run.started_at
+        if finished.tzinfo is None:
+            finished = finished.replace(tzinfo=timezone.utc)
+        return finished, round(max(0.0, (now - finished).total_seconds() / 3600), 1)
+
+    capture_at, capture_age = age(capture_run)
+    overview_at, overview_age = age(overview_run)
+    capture_stale = capture_age is None or capture_age > stale_hours
+    overview_stale = overview_age is None or overview_age > overview_stale_hours
+    return {
+        "last_run": capture_at.isoformat() if capture_at else None,
+        "age_hours": capture_age,
+        "stale": capture_stale or overview_stale,
+        "last_status": latest.status if latest else "never",
+        "capture": {
+            "last_run": capture_at.isoformat() if capture_at else None,
+            "age_hours": capture_age,
+            "stale": capture_stale,
+        },
+        "overview": {
+            "last_run": overview_at.isoformat() if overview_at else None,
+            "age_hours": overview_age,
+            "stale": overview_stale,
+        },
+    }

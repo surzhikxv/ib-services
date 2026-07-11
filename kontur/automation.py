@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from kontur.models import SyncRun
+from kontur.connectors.tiktok.sync import tiktok_freshness
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,29 @@ def freshness_report(
     rows: list[dict] = []
     with session_factory() as session:
         for policy in policies:
+            if policy.connector == "tiktok":
+                tiktok = tiktok_freshness(
+                    session_factory,
+                    now=checked_at,
+                    stale_hours=int(policy.stale_after_hours),
+                )
+                rows.append(
+                    {
+                        "connector": policy.connector,
+                        "mode": policy.mode,
+                        "last_status": tiktok["last_status"],
+                        "last_started_at": tiktok["last_run"],
+                        "last_success_at": tiktok["last_run"],
+                        "age_hours": tiktok["age_hours"],
+                        "stale_after_hours": policy.stale_after_hours,
+                        "stale": tiktok["stale"],
+                        "due": False,
+                        "has_error": tiktok["last_status"] == "error",
+                        "capture": tiktok["capture"],
+                        "overview": tiktok["overview"],
+                    }
+                )
+                continue
             latest = session.scalar(
                 select(SyncRun)
                 .where(SyncRun.connector == policy.connector)

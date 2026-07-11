@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Контур — TikTok Studio capture & auto-walk (B+)
+// @name         Контур — TikTok Studio capture
 // @namespace    kontur.rosta
-// @version      2.3
-// @description  Пассивно собирает богатую per-video аналитику из залогиненного TikTok Studio и (опц.) сам обходит видео человеческим темпом, заливая JSON на ingest коннектора kontur.tiktok. Перечисление — из ответов item_list (не из DOM), страницы ключуются по составу id (cursor у TikTok не уникален). Заливка — ОДНИМ запросом (коннектор сливает item_list+insight по aweme_id; чанкинг рвал merge). Закреп в item_list не приходит (рендерится из SSR) — вводится вручную и обходится точечно. Ничего не форжит — читает ответы, что страница и так грузит.
+// @version      3.0
+// @description  Пассивно сохраняет ответы TikTok Studio и последовательно открывает аналитику публикаций с фиксированным лимитом, ручными паузами и стопом при защитной проверке.
 // @match        https://www.tiktok.com/tiktokstudio/*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -14,294 +14,585 @@
 // ==/UserScript==
 
 /*
- БЕЗОПАСНОСТЬ: скрипт НЕ шлёт запросы в TikTok и НЕ передаёт сессию. Он ЧИТАЕТ
- JSON-ответы аналитики, которые страница и так загружает. Подпись (webmssdk/X-Bogus)
- делает сама страница. Авто-обход = переход по твоим же URL аналитики человеческим
- темпом — выглядит как ты сам листаешь Studio. Это твой основной аккаунт: темп
- щадящий, и перед обходом ОБЯЗАТЕЛЕН «Сухой прогон» (показывает, сколько видео нашёл).
+ Версия 3.0 не подделывает запросы, подписи, заголовки или поведение пользователя.
+ Она только читает ответы, которые загрузил TikTok Studio, и открывает штатные
+ страницы аналитики в одной вкладке. Между страницами — не менее 15 секунд;
+ каждые 20 публикаций требуется ручное продолжение. При 401/403/429, CAPTCHA,
+ challenge или выходе из аккаунта обход немедленно останавливается.
 
- НАСТРОЙКА: вписать в плашке Endpoint (напр. https://thedialog.ru/ingest/tiktok)
- и Token (= TIKTOK_INGEST_TOKEN с сервера). Открыть «Публикации» и ОДИН РАЗ
- медленно промотать список до конца (DOM виртуализирован — перечисление берётся из
- ответов item_list, которые подгружаются при прокрутке) → «Сухой прогон» покажет
- число видео → «Старт обход». По концу обхода JSON сам уйдёт на сервер ОДНИМ запросом
- (или «Скачать»). При не-200/таймауте буфер сохраняется — можно повторить «Залить».
-
- ЗАКРЕП: закреплённые посты НЕ приходят в item_list (TikTok рендерит их из SSR-JSON
- страницы, сетевой хук их не видит) — их не найдёт ни «Сухой прогон», ни обход. Открой
- закреплённое видео (на профиле бейдж «Закреплено») → возьми ID из URL /video/<id> →
- впиши в поле «Закреп» (через запятую) → «Закреп ⭯»: точечно обойдёт только их и зальёт
- как pinned_video. Введённые ID запоминаются и попадают и в полный обход.
+ Перед каждым сбором нажми «Новый сбор», затем вручную промотай «Публикации» до
+ конца. «Проверить» покажет размер каталога. Сервер примет только один завершённый
+ пакет v3: весь каталог + явно указанные закрепы должны быть полностью обойдены.
 */
 
 (function () {
   'use strict';
+
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  const SCRIPT_VERSION = '3.0';
+  const PAGE_DELAY_MS = 15000;
+  const PAUSE_EVERY_STEPS = 60; // 3 страницы × 20 публикаций
+  const OWNER_TTL_MS = 60000;
+  const TABS = ['', 'viewers', 'engagement'];
+  const TAB_ID_KEY = 'kontur_tiktok_tab_id';
+  const TAB_ID = sessionStorage.getItem(TAB_ID_KEY) || makeId();
+  sessionStorage.setItem(TAB_ID_KEY, TAB_ID);
 
-  // --- персистентное состояние (переживает переходы между страницами) ---
-  const K = { cap: 'k_cap', queue: 'k_queue', mode: 'k_mode', ep: 'k_ep', tok: 'k_tok', hb: 'k_hb', pins: 'k_pins' };
-  const getJSON = (k, d) => { try { return JSON.parse(GM_getValue(k, '')) ?? d; } catch (e) { return d; } };
-  const setJSON = (k, v) => GM_setValue(k, JSON.stringify(v));
+  const K = {
+    schema: 'k3_schema', cap: 'k3_cap', queue: 'k3_queue', mode: 'k3_mode',
+    ep: 'k_ep', tok: 'k_tok', hb: 'k_hb', pins: 'k3_pins', batch: 'k3_batch',
+    expected: 'k3_expected', visited: 'k3_visited', nextPause: 'k3_next_pause',
+    owner: 'k3_owner', safety: 'k3_safety', overview: 'k3_overview',
+    overviewName: 'k3_overview_name', year: 'k3_overview_year',
+  };
 
-  const WANT = (u) =>
-    /\/aweme\/v2\/data\/insight|comment\/v1\/get_key_words|ai_comment\/analytics_overview|creator\/manage\/item_list/.test(u);
-  const isItemList = (u) => /creator\/manage\/item_list/.test(u);
+  let el;
 
-  function awemeId(url) {
-    const m = /type_requests=([^&]+)/.exec(url);
-    if (m) { try { const a = JSON.parse(decodeURIComponent(m[1])); const o = a.find((x) => x && x.aweme_id); if (o) return o.aweme_id; } catch (e) {} }
-    const v = /[?&](?:vid|item_id|aweme_id)=(\d+)/.exec(url);
-    return v ? v[1] : '_';
+  function makeId() {
+    if (W.crypto && typeof W.crypto.randomUUID === 'function') return W.crypto.randomUUID();
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
   }
 
-  function hash(s) {  // дешёвый стабильный хеш строки (djb2)
-    let h = 5381;
-    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-    return (h >>> 0).toString(36);
+  function getJSON(key, fallback) {
+    try { return JSON.parse(GM_getValue(key, '')) ?? fallback; } catch (e) { return fallback; }
   }
+
+  function setJSON(key, value) { GM_setValue(key, JSON.stringify(value)); }
+
+  function initState() {
+    if (GM_getValue(K.schema, '') === SCRIPT_VERSION) return;
+    [K.cap, K.queue, K.mode, K.batch, K.expected, K.visited, K.nextPause,
+      K.owner, K.safety, K.overview, K.overviewName, K.year].forEach(GM_deleteValue);
+    GM_setValue(K.schema, SCRIPT_VERSION);
+  }
+
+  function ensureBatch() {
+    let id = GM_getValue(K.batch, '');
+    if (!id) {
+      id = makeId();
+      GM_setValue(K.batch, id);
+      setJSON(K.cap, {});
+      setJSON(K.queue, []);
+      setJSON(K.expected, []);
+      setJSON(K.visited, {});
+      GM_setValue(K.nextPause, PAUSE_EVERY_STEPS);
+      GM_setValue(K.mode, 'idle');
+    }
+    return id;
+  }
+
+  const WANT = (url) =>
+    /\/aweme\/v2\/data\/insight|comment\/v1\/get_key_words|ai_comment\/analytics_overview|creator\/manage\/item_list/.test(url);
+  const isItemList = (url) => /creator\/manage\/item_list/.test(url);
+  const isInsight = (url) => /\/aweme\/v2\/data\/insight/.test(url);
+
+  function awemeIds(url, json) {
+    const ids = new Set();
+    const match = /type_requests=([^&]+)/.exec(url || '');
+    if (match) {
+      try {
+        const requests = JSON.parse(decodeURIComponent(match[1]));
+        requests.forEach((request) => {
+          if (request && request.aweme_id) ids.add(String(request.aweme_id));
+        });
+      } catch (e) {
+        const decoded = decodeURIComponent(match[1]);
+        for (const found of decoded.matchAll(/"aweme_id"\s*:\s*"(\d+)"/g)) ids.add(found[1]);
+      }
+    }
+    const queryId = /[?&](?:vid|item_id|aweme_id)=(\d+)/.exec(url || '');
+    if (queryId) ids.add(queryId[1]);
+    if (json && json.video_info && json.video_info.aweme_id) {
+      ids.add(String(json.video_info.aweme_id));
+    }
+    return [...ids];
+  }
+
+  function hash(value) {
+    let result = 5381;
+    for (let i = 0; i < value.length; i++) result = ((result << 5) + result + value.charCodeAt(i)) | 0;
+    return (result >>> 0).toString(36);
+  }
+
+  function parseIds(text) {
+    const ids = new Set();
+    let rejected = 0;
+    let shortlink = false;
+    for (let token of String(text || '').split(/[\s,;]+/)) {
+      token = token.trim();
+      if (!token) continue;
+      const match = /\/(?:video|photo|analytics)\/(\d{6,})/.exec(token);
+      if (match) { ids.add(match[1]); continue; }
+      if (/^\d{6,}$/.test(token)) { ids.add(token); continue; }
+      if (/(?:vm|vt)\.tiktok\.com|\/t\//i.test(token)) shortlink = true;
+      rejected++;
+    }
+    return { ids: [...ids], rejected, shortlink };
+  }
+
+  function status(message) {
+    if (el) el.querySelector('#k-st').textContent = message;
+  }
+
   function record(url, json) {
     if (!WANT(url) || !json || typeof json !== 'object') return;
+    ensureBatch();
     const cap = getJSON(K.cap, {});
-    // item_list грузится СТРАНИЦАМИ ПРИ ЗАГРУЗКЕ страницы; cursor у TikTok НЕ уникален
-    // (видели [50,90,null,null,50,...]) → дедуп по cursor ЗАТИРАЛ страницы (выходило 62
-    // из 105). Ключуем по хешу всех id страницы: разные страницы → разные ключи (копим),
-    // повторный фетч той же страницы → тот же ключ (дедуп).
     let key;
     if (isItemList(url)) {
-      const ids = (json.item_list || []).map((it) => it && it.item_id).filter(Boolean);
+      const ids = (json.item_list || []).map((item) => item && item.item_id).filter(Boolean).map(String);
       key = 'itemlist|' + ids.length + '|' + hash(ids.join(','));
-      // детектируем закреплённые посты по флагам is_top / pin_status / pinned
-      const pins = getJSON(K.pins, []);
-      const pinSet = new Set(pins);
-      (json.item_list || []).forEach((it) => {
-        if (it && it.item_id && (it.is_top || it.pin_status || it.pinned)) {
-          pinSet.add(String(it.item_id));
+      const pins = new Set(getJSON(K.pins, []));
+      (json.item_list || []).forEach((item) => {
+        if (item && item.item_id && (item.is_top || item.pin_status || item.pinned)) {
+          pins.add(String(item.item_id));
         }
       });
-      setJSON(K.pins, [...pinSet]);
+      setJSON(K.pins, [...pins]);
     } else {
-      key = awemeId(url) + '|' + url.split('?')[0] + '|' + Object.keys(json).sort().join(',');
+      const ids = awemeIds(url, json);
+      key = (ids.join(',') || '_') + '|' + url.split('?')[0] + '|' + hash(url);
     }
     cap[key] = { url, json };
     setJSON(K.cap, cap);
     paint();
   }
 
-  // Все aweme_id из захваченных страниц item_list (перечисление без DOM-скрапа).
   function catalogIds() {
     const ids = new Set();
-    Object.values(getJSON(K.cap, {})).forEach((e) => {
-      if (e && isItemList(e.url || '') && e.json && Array.isArray(e.json.item_list)) {
-        e.json.item_list.forEach((it) => { if (it && it.item_id) ids.add(String(it.item_id)); });
-      }
+    Object.values(getJSON(K.cap, {})).forEach((entry) => {
+      if (!entry || !isItemList(entry.url || '') || !entry.json || !Array.isArray(entry.json.item_list)) return;
+      entry.json.item_list.forEach((item) => {
+        if (item && item.item_id) ids.add(String(item.item_id));
+      });
     });
     return ids;
   }
 
-  // --- перехват ответов (только чтение) ---
-  const _fetch = W.fetch;
-  W.fetch = async function (...a) {
-    const r = await _fetch.apply(this, a);
-    try { const u = typeof a[0] === 'string' ? a[0] : (a[0] && a[0].url) || ''; if (WANT(u)) record(u, JSON.parse(await r.clone().text())); } catch (e) {}
-    return r;
-  };
-  const _open = W.XMLHttpRequest.prototype.open, _send = W.XMLHttpRequest.prototype.send;
-  W.XMLHttpRequest.prototype.open = function (m, u) { this.__u = u; return _open.apply(this, arguments); };
-  W.XMLHttpRequest.prototype.send = function () {
-    this.addEventListener('load', () => { try { if (WANT(this.__u)) record(this.__u, JSON.parse(this.responseText)); } catch (e) {} });
-    return _send.apply(this, arguments);
-  };
-
-  // --- перечисление видео ---
-  // Источник — захваченные страницы item_list (catalogIds). DOM «Публикаций»
-  // виртуализирован (всегда ~8 строк, прокруткой из скрипта не вычерпать —
-  // синтетические события react-window игнорирует), зато ответ item_list страница
-  // за страницей содержит ВЕСЬ каталог. Достаточно один раз промотать «Публикации»
-  // до конца — хук поймает все страницы; здесь читаем накопленное.
-  function collectIds() {
-    const ids = catalogIds();
-    // запасной путь — если в DOM всё же есть прямые ссылки
-    document.querySelectorAll('a[href*="/video/"],a[href*="/photo/"],a[href*="/analytics/"]').forEach((a) => {
-      const m = /\/(?:video|photo|analytics)\/(\d{6,})/.exec(a.getAttribute('href') || '');
-      if (m) ids.add(m[1]);
-    });
-    return [...ids];
-  }
-
-  // Разбор ручного ввода закрепа: URL/ID → набор aweme_id. Короткие ссылки
-  // (vm/vt.tiktok, /t/) НЕ резолвим — это потребовало бы запроса в TikTok
-  // (нарушает «скрипт не шлёт запросы в TikTok»); помечаем shortlink для подсказки.
-  function parseIds(text) {
+  function insightIds() {
     const ids = new Set();
-    let rejected = 0, shortlink = false;
-    for (let tok of String(text == null ? '' : text).split(/[\s,;]+/)) {
-      tok = tok.trim();
-      if (!tok) continue;
-      const m = /\/(?:video|photo|analytics)\/(\d{6,})/.exec(tok);
-      if (m) { ids.add(m[1]); continue; }
-      if (/^\d{6,}$/.test(tok)) { ids.add(tok); continue; }
-      if (/(?:vm|vt)\.tiktok\.com|\/t\//i.test(tok)) shortlink = true;
-      rejected++;
-    }
-    return { ids: [...ids], rejected, shortlink };
+    Object.values(getJSON(K.cap, {})).forEach((entry) => {
+      if (!entry || !isInsight(entry.url || '') || !entry.json || !entry.json.video_info) return;
+      awemeIds(entry.url, entry.json).forEach((id) => ids.add(id));
+    });
+    return ids;
   }
 
-  const rnd = (a, b) => a + Math.floor(Math.random() * (b - a));
-  const stepUrl = (s) => 'https://www.tiktok.com/tiktokstudio/analytics/' + s.id + (s.tab ? '/' + s.tab : '');
+  function savePins() {
+    const input = el && el.querySelector('#k-pins');
+    const parsed = parseIds(input ? input.value : '');
+    if (parsed.ids.length || !(input && input.value.trim())) setJSON(K.pins, parsed.ids);
+    return parsed;
+  }
 
-  // --- драйвер обхода (между переходами состояние в GM) ---
-  async function advance() {
-    const q = getJSON(K.queue, []);
-    if (!q.length) { return finishWalk(); }
-    const next = q.shift();
-    setJSON(K.queue, q);
+  function allIds() {
+    const ids = catalogIds();
+    getJSON(K.pins, []).forEach((id) => ids.add(String(id)));
+    return ids;
+  }
+
+  function stepUrl(step) {
+    return 'https://www.tiktok.com/tiktokstudio/analytics/' + step.id + (step.tab ? '/' + step.tab : '');
+  }
+
+  function ownerLease() { return getJSON(K.owner, null); }
+
+  function claimOwner() {
+    const current = ownerLease();
+    const now = Date.now();
+    if (current && current.tab !== TAB_ID && current.expires > now) return false;
+    setJSON(K.owner, { tab: TAB_ID, expires: now + OWNER_TTL_MS });
+    return true;
+  }
+
+  function releaseOwner() {
+    const current = ownerLease();
+    if (current && current.tab === TAB_ID) GM_deleteValue(K.owner);
+  }
+
+  function safetyStop(reason) {
+    if (GM_getValue(K.safety, '')) return;
+    GM_setValue(K.safety, reason);
+    GM_setValue(K.mode, 'stopped');
+    releaseOwner();
+    status('СТОП: ' + reason + '. Ничего не продолжай, пока не проверишь аккаунт.');
+    paint();
+  }
+
+  function checkPageSafety() {
+    if (/\/(?:login|challenge|captcha)(?:\/|\?|$)/i.test(location.href)) {
+      safetyStop('TikTok открыл страницу входа или проверки');
+      return false;
+    }
+    if (document.querySelector('iframe[src*="captcha" i], [id*="captcha" i], [class*="captcha" i], [data-e2e*="captcha" i]')) {
+      safetyStop('на странице обнаружена CAPTCHA');
+      return false;
+    }
+    return !GM_getValue(K.safety, '');
+  }
+
+  const originalFetch = W.fetch;
+  W.fetch = async function (...args) {
+    const response = await originalFetch.apply(this, args);
+    try {
+      const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+      if ([401, 403, 429].includes(response.status)) safetyStop('TikTok ответил HTTP ' + response.status);
+      if (WANT(url)) record(url, JSON.parse(await response.clone().text()));
+    } catch (e) {}
+    return response;
+  };
+
+  const originalOpen = W.XMLHttpRequest.prototype.open;
+  const originalSend = W.XMLHttpRequest.prototype.send;
+  W.XMLHttpRequest.prototype.open = function (method, url) {
+    this.__konturUrl = url;
+    return originalOpen.apply(this, arguments);
+  };
+  W.XMLHttpRequest.prototype.send = function () {
+    this.addEventListener('load', () => {
+      try {
+        if ([401, 403, 429].includes(this.status)) safetyStop('TikTok ответил HTTP ' + this.status);
+        if (WANT(this.__konturUrl || '')) record(this.__konturUrl, JSON.parse(this.responseText));
+      } catch (e) {}
+    });
+    return originalSend.apply(this, arguments);
+  };
+
+  function currentStep() {
+    const match = /\/tiktokstudio\/analytics\/(\d{6,})(?:\/(viewers|engagement))?/.exec(location.pathname);
+    return match ? { id: match[1], tab: match[2] || '' } : null;
+  }
+
+  function markCurrentVisited() {
+    const step = currentStep();
+    if (!step) return;
+    const visited = getJSON(K.visited, {});
+    const tabs = new Set(visited[step.id] || []);
+    tabs.add(step.tab);
+    visited[step.id] = [...tabs];
+    setJSON(K.visited, visited);
+  }
+
+  function visitedSteps() {
+    return Object.values(getJSON(K.visited, {})).reduce((sum, tabs) => sum + new Set(tabs || []).size, 0);
+  }
+
+  function buildMissingQueue(ids) {
+    const visited = getJSON(K.visited, {});
+    const queue = [];
+    ids.forEach((id) => {
+      const done = new Set(visited[id] || []);
+      TABS.forEach((tab) => { if (!done.has(tab)) queue.push({ id, tab }); });
+    });
+    return queue;
+  }
+
+  function advance() {
+    if (GM_getValue(K.mode, 'idle') !== 'walking' || !checkPageSafety()) return;
+    if (!claimOwner()) {
+      status('Пауза: обход уже выполняется в другой вкладке.');
+      paint();
+      return;
+    }
+    const queue = getJSON(K.queue, []);
+    if (!queue.length) { finishWalk(); return; }
+    const next = queue.shift();
+    setJSON(K.queue, queue);
+    setJSON(K.owner, { tab: TAB_ID, expires: Date.now() + OWNER_TTL_MS });
     paint();
     location.href = stepUrl(next);
   }
-  function finishWalk() {
-    GM_setValue(K.mode, 'idle');
-    upload(true);
+
+  function completePageAndAdvance() {
+    if (!checkPageSafety() || GM_getValue(K.mode, 'idle') !== 'walking') return;
+    if (!claimOwner()) {
+      status('Пауза: владельцем обхода стала другая вкладка.');
+      paint();
+      return;
+    }
+    markCurrentVisited();
+    const queue = getJSON(K.queue, []);
+    const done = visitedSteps();
+    const pauseAt = Number(GM_getValue(K.nextPause, PAUSE_EVERY_STEPS));
+    if (queue.length && done >= pauseAt) {
+      GM_setValue(K.nextPause, pauseAt + PAUSE_EVERY_STEPS);
+      GM_setValue(K.mode, 'paused');
+      releaseOwner();
+      status('Плановая пауза после 20 публикаций. Проверь TikTok и нажми «Продолжить».');
+      paint();
+      return;
+    }
+    advance();
   }
-  function startQueue(ids) {
-    const q = [];
-    ids.forEach((id) => { q.push({ id, tab: '' }); q.push({ id, tab: 'viewers' }); q.push({ id, tab: 'engagement' }); });
-    setJSON(K.queue, q);
+
+  function startWalk() {
+    if (!checkPageSafety()) return;
+    ensureBatch();
+    const parsed = savePins();
+    if (parsed.shortlink) {
+      status('Короткие ссылки не поддержаны: открой их и вставь полный URL /video/<id>.');
+      return;
+    }
+    const ids = [...allIds()];
+    if (!ids.length) {
+      status('Видео не найдены. Промотай «Публикации» до конца и нажми «Проверить».');
+      return;
+    }
+    if (!claimOwner()) {
+      status('Обход уже запущен в другой вкладке. Закрой её или нажми там «Пауза».');
+      return;
+    }
+    const queue = buildMissingQueue(ids);
+    setJSON(K.expected, ids);
+    setJSON(K.queue, queue);
+    if (!queue.length) { finishWalk(); return; }
     GM_setValue(K.mode, 'walking');
+    status('Начинаю последовательный обход: ' + ids.length + ' публикаций.');
     paint();
     advance();
   }
-  function startWalk() {
-    const ids = new Set(collectIds());
-    // закреп в item_list не приходит (SSR) — добираем известные закреплённые из k_pins
-    getJSON(K.pins, []).forEach((id) => ids.add(String(id)));
-    if (!ids.size) { status('Видео не найдены. Открой «Публикации» и промотай список до конца, потом «Сухой прогон».'); return; }
-    startQueue([...ids]);
-  }
-  // Точечный обход только закреплённых (которых нет в item_list). Введённые ID —
-  // authoritative-набор: перезаписывают k_pins (не копятся), чинит «вечный закреп»
-  // при откреплении. По концу обхода finishWalk зальёт их (typed pinned_video).
-  function walkPins() {
-    const input = el && el.querySelector('#k-pins');
-    const { ids, rejected, shortlink } = parseIds(input ? input.value : '');
-    if (!ids.length) {
-      status(shortlink
-        ? 'Короткие ссылки (vm/vt.tiktok) не поддержаны — открой их и вставь полный /video/<id>.'
-        : 'Вставь ID или ссылки закреплённых: /video/<id> либо сам 18–19-значный ID.');
+
+  function resumeWalk() {
+    if (!checkPageSafety()) return;
+    if (!getJSON(K.queue, []).length) { startWalk(); return; }
+    if (!claimOwner()) {
+      status('Обход уже выполняется в другой вкладке.');
       return;
     }
-    setJSON(K.pins, ids);  // текущий набор закреплённых (перезапись)
-    status('Обход закрепа: ' + ids.length + ' видео' + (rejected ? ` (пропущено битых: ${rejected})` : '') + '...');
-    startQueue(ids);
+    GM_setValue(K.mode, 'walking');
+    status('Обход продолжен.');
+    paint();
+    advance();
   }
 
-  // --- заливка на ingest ОДНИМ запросом (cross-origin через GM_xmlhttpRequest) ---
-  // Весь буфер одним POST: коннектор так и задуман — сливает item_list+insight по
-  // одному aweme_id за раз. Чанкинг по 80 рвал этот merge (разные чанки → отдельные
-  // upsert'ы, последний по видео затирал; закреп-типизация и _catalog терялись).
-  // nginx client_max_body_size=50m; типичный буфер ~10 МБ.
-  function upload(auto) {
-    // читаем из input напрямую — на случай если onchange не сохранил актуальное значение
-    const epInput = el && el.querySelector('#k-ep');
-    const tokInput = el && el.querySelector('#k-tok');
-    if (epInput && epInput.value.trim()) GM_setValue(K.ep, epInput.value.trim());
-    if (tokInput && tokInput.value.trim()) GM_setValue(K.tok, tokInput.value.trim());
-    const ep = GM_getValue(K.ep, ''), tok = GM_getValue(K.tok, '');
-    const cap = Object.values(getJSON(K.cap, {}));
-    if (!ep || !tok) { if (!auto) status('Впиши Endpoint и Token в плашке.'); return; }
-    if (!cap.length) { if (!auto) status('Нечего заливать — сначала собери данные.'); return; }
-    const body = JSON.stringify({ capture: cap, pinned_ids: getJSON(K.pins, []) });
-    const mb = (body.length / 1048576).toFixed(1);
-    if (body.length > 48 * 1048576) {
-      status('Буфер ' + mb + ' МБ > 48 (лимит nginx 50). Жми «Скачать» и залей файлом.'); paint(); return;
+  function finishWalk() {
+    const expected = new Set(getJSON(K.expected, []));
+    const current = allIds();
+    current.forEach((id) => expected.add(id));
+    setJSON(K.expected, [...expected]);
+    const missingPages = buildMissingQueue([...expected]);
+    const insights = insightIds();
+    const missingInsights = [...expected].filter((id) => !insights.has(id));
+    if (missingPages.length || missingInsights.length) {
+      setJSON(K.queue, missingPages);
+      GM_setValue(K.mode, 'paused');
+      releaseOwner();
+      status('Сбор неполный: страниц осталось ' + missingPages.length + ', ответов аналитики — ' + missingInsights.length + '. Нажми «Продолжить».');
+      paint();
+      return;
     }
-    status('Заливка ' + cap.length + ' захватов одним запросом (' + mb + ' МБ)...');
+    GM_setValue(K.mode, 'ready');
+    releaseOwner();
+    status('Все публикации собраны. Отправляю один полный пакет…');
+    paint();
+    upload(true);
+  }
+
+  function payload() {
+    const capture = Object.values(getJSON(K.cap, {}));
+    const catalog = catalogIds();
+    const insights = insightIds();
+    const expected = allIds();
+    const body = {
+      capture,
+      pinned_ids: getJSON(K.pins, []),
+      batch_id: GM_getValue(K.batch, ''),
+      script_version: SCRIPT_VERSION,
+      expected_videos: expected.size,
+      catalog_videos: catalog.size,
+      insight_videos: insights.size,
+      complete: true,
+    };
+    const overview = GM_getValue(K.overview, '');
+    if (overview) {
+      body.overview = overview;
+      body.year = Number(GM_getValue(K.year, new Date().getFullYear()));
+    }
+    return body;
+  }
+
+  function validateBeforeUpload(body) {
+    if (GM_getValue(K.safety, '')) return 'активен защитный стоп';
+    if (!body.batch_id) return 'нет batch_id — начни новый сбор';
+    if (!body.capture.length || !body.expected_videos) return 'буфер пуст';
+    if (getJSON(K.queue, []).length || GM_getValue(K.mode, 'idle') === 'walking') return 'обход ещё не завершён';
+    if (body.insight_videos !== body.expected_videos) {
+      return 'полная аналитика есть только для ' + body.insight_videos + ' из ' + body.expected_videos;
+    }
+    if (body.catalog_videos + getJSON(K.pins, []).filter((id) => !catalogIds().has(String(id))).length !== body.expected_videos) {
+      return 'каталог и список закрепов не покрывают все публикации';
+    }
+    if (buildMissingQueue([...allIds()]).length) return 'не все три страницы каждой публикации пройдены';
+    return '';
+  }
+
+  function upload(auto) {
+    const endpointInput = el && el.querySelector('#k-ep');
+    const tokenInput = el && el.querySelector('#k-tok');
+    if (endpointInput && endpointInput.value.trim()) GM_setValue(K.ep, endpointInput.value.trim());
+    if (tokenInput && tokenInput.value.trim()) GM_setValue(K.tok, tokenInput.value.trim());
+    const endpoint = GM_getValue(K.ep, '');
+    const token = GM_getValue(K.tok, '');
+    if (!endpoint || !token) { status('Впиши Endpoint и Token.'); return; }
+    const bodyObject = payload();
+    const problem = validateBeforeUpload(bodyObject);
+    if (problem) { status('Не отправлено: ' + problem + '.'); return; }
+    const body = JSON.stringify(bodyObject);
+    const megabytes = (body.length / 1048576).toFixed(1);
+    if (body.length > 48 * 1048576) {
+      status('Пакет ' + megabytes + ' МБ превышает безопасный лимит 48 МБ. Скачай его для ручной проверки.');
+      return;
+    }
+    status('Отправляю один полный пакет (' + bodyObject.expected_videos + ' видео, ' + megabytes + ' МБ)…');
     GM_xmlhttpRequest({
-      method: 'POST', url: ep,
-      headers: { 'Content-Type': 'application/json', 'X-Kontur-Token': tok },
+      method: 'POST',
+      url: endpoint,
+      headers: { 'Content-Type': 'application/json', 'X-Kontur-Token': token },
       data: body,
       timeout: 120000,
-      onload: (r) => {
-        if (r.status === 200) {
-          GM_setValue(K.cap, '{}');
+      onload: (response) => {
+        if (response.status === 200) {
+          let count = bodyObject.expected_videos;
+          try {
+            const parsed = JSON.parse(response.responseText);
+            if (parsed && parsed.stats && parsed.stats.videos) count = parsed.stats.videos;
+          } catch (e) {}
           GM_setValue(K.hb, new Date().toISOString());
-          let n = '';
-          try { const j = JSON.parse(r.responseText); if (j && j.stats) n = ' видео: ' + j.stats.videos; } catch (e) {}
-          status('Залито ✓' + n);
+          [K.cap, K.queue, K.expected, K.visited, K.batch, K.nextPause, K.overview,
+            K.overviewName, K.year].forEach(GM_deleteValue);
+          GM_setValue(K.mode, 'idle');
+          status('Залито ✓ · видео: ' + count);
           paint();
         } else {
-          // буфер НЕ чистим — можно повторить «Залить» или «Скачать»
-          status('Ошибка ' + r.status + ': ' + (r.responseText || '').slice(0, 200) + ' — буфер сохранён');
+          status('Сервер отклонил пакет (' + response.status + '): ' + (response.responseText || '').slice(0, 220) + '. Буфер сохранён.');
           paint();
         }
       },
-      onerror: (e) => { status('Сеть ошибка: ' + JSON.stringify(e).slice(0, 150) + ' — буфер сохранён'); paint(); },
-      ontimeout: () => { status('Таймаут (120с) — буфер сохранён, повтори «Залить» или «Скачать»'); paint(); },
+      onerror: () => { status('Ошибка сети. Буфер сохранён.'); paint(); },
+      ontimeout: () => { status('Таймаут 120 секунд. Буфер сохранён.'); paint(); },
     });
   }
+
   function download() {
-    const cap = Object.values(getJSON(K.cap, {}));
-    const blob = new Blob([JSON.stringify(cap)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = 'tiktok_capture_' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+    const body = payload();
+    const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'tiktok_batch_' + new Date().toISOString().slice(0, 10) + '.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
-  // --- UI ---
-  let el;
-  function status(s) { if (el) el.querySelector('#k-st').textContent = s; }
+  function newBatch() {
+    releaseOwner();
+    [K.cap, K.queue, K.expected, K.visited, K.batch, K.nextPause, K.safety,
+      K.overview, K.overviewName, K.year].forEach(GM_deleteValue);
+    GM_setValue(K.mode, 'idle');
+    ensureBatch();
+    status('Новый сбор начат. Теперь вручную промотай «Публикации» до конца.');
+    paint();
+  }
+
+  function stopWalk() {
+    GM_setValue(K.mode, 'paused');
+    releaseOwner();
+    status('Обход поставлен на паузу. Буфер и очередь сохранены.');
+    paint();
+  }
+
+  function readOverview(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      GM_setValue(K.overview, String(reader.result || ''));
+      GM_setValue(K.overviewName, file.name);
+      const match = /(20\d{2})[-_]/.exec(file.name);
+      if (match) GM_setValue(K.year, match[1]);
+      const yearInput = el && el.querySelector('#k-year');
+      if (yearInput) yearInput.value = GM_getValue(K.year, new Date().getFullYear());
+      status('Overview.csv добавлен: ' + file.name);
+      paint();
+    };
+    reader.readAsText(file);
+  }
+
   function paint() {
     if (!el) return;
-    const cap = getJSON(K.cap, {});
-    const vids = catalogIds();  // из item_list
-    Object.keys(cap).forEach((k) => { if (!k.startsWith('itemlist|')) vids.add(k.split('|')[0]); });  // + пройденные обходом
-    const q = getJSON(K.queue, []), mode = GM_getValue(K.mode, 'idle'), hb = GM_getValue(K.hb, '—');
-    el.querySelector('#k-n').textContent = `${vids.size} видео · ${Object.keys(cap).length} захватов` +
-      (mode === 'walking' ? ` · обход: осталось ${q.length}` : '') + ` · залито: ${hb}`;
+    const catalog = catalogIds();
+    const insights = insightIds();
+    const total = allIds();
+    const queue = getJSON(K.queue, []);
+    const mode = GM_getValue(K.mode, 'idle');
+    const heartbeat = GM_getValue(K.hb, '—');
+    const overview = GM_getValue(K.overviewName, 'нет');
+    el.querySelector('#k-n').textContent =
+      'каталог ' + catalog.size + ' · всего ' + total.size + ' · аналитика ' + insights.size +
+      ' · очередь ' + queue.length + ' · режим ' + mode + ' · Overview ' + overview +
+      ' · залито ' + heartbeat;
   }
+
   function mountUI() {
     el = document.createElement('div');
-    el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483647;background:#111;color:#fff;font:12px/1.4 -apple-system,sans-serif;padding:10px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);width:280px;opacity:.95';
+    el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483647;background:#111;color:#fff;font:12px/1.4 -apple-system,sans-serif;padding:10px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);width:340px;opacity:.96';
     el.innerHTML =
-      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok B+</div>' +
-      '<div id="k-n" style="color:#7fd;margin-bottom:6px">—</div>' +
-      '<input id="k-ep" placeholder="Endpoint /ingest/tiktok" style="width:100%;margin-bottom:4px;padding:4px;border-radius:5px;border:0">' +
-      '<input id="k-tok" placeholder="Token" style="width:100%;margin-bottom:4px;padding:4px;border-radius:5px;border:0">' +
-      '<input id="k-pins" placeholder="Закреп: ID/URL через запятую" style="width:100%;margin-bottom:6px;padding:4px;border-radius:5px;border:0">' +
-      '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-      '<button id="k-dry" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#555;color:#fff">Сухой прогон</button>' +
-      '<button id="k-go" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#2d8cff;color:#fff">Старт обход</button>' +
-      '<button id="k-pinwalk" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#c60;color:#fff">Закреп ⭯</button>' +
-      '<button id="k-stop" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#a33;color:#fff">Стоп</button>' +
-      '<button id="k-up" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#393;color:#fff">Залить</button>' +
-      '<button id="k-dl" style="flex:1;cursor:pointer;border:0;border-radius:5px;padding:5px;background:#555;color:#fff">Скачать</button>' +
-      '</div><div id="k-st" style="margin-top:6px;color:#bbb;min-height:14px"></div>';
+      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok v3</div>' +
+      '<div id="k-n" style="color:#7fd;margin-bottom:6px;word-break:break-word">—</div>' +
+      '<input id="k-ep" placeholder="Endpoint /ingest/tiktok" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
+      '<input id="k-tok" type="password" placeholder="Token" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
+      '<input id="k-pins" placeholder="Закрепы: ID/полный URL через запятую" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
+      '<div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">' +
+      '<label style="flex:1;background:#333;padding:5px;border-radius:5px;cursor:pointer">Overview.csv (необязательно)<input id="k-overview" type="file" accept=".csv,text/csv" style="display:none"></label>' +
+      '<input id="k-year" type="number" min="2020" max="2100" title="Год первой строки Overview" style="width:64px;padding:5px;border:0;border-radius:5px">' +
+      '</div><div style="display:flex;gap:4px;flex-wrap:wrap">' +
+      '<button id="k-new" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#555;color:#fff">Новый сбор</button>' +
+      '<button id="k-dry" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#555;color:#fff">Проверить</button>' +
+      '<button id="k-go" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#2d8cff;color:#fff">Старт</button>' +
+      '<button id="k-resume" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#c60;color:#fff">Продолжить</button>' +
+      '<button id="k-stop" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#a33;color:#fff">Пауза</button>' +
+      '<button id="k-up" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#393;color:#fff">Залить</button>' +
+      '<button id="k-dl" style="flex:1 0 30%;cursor:pointer;border:0;border-radius:5px;padding:6px;background:#555;color:#fff">Скачать</button>' +
+      '</div><div id="k-st" style="margin-top:7px;color:#bbb;min-height:28px"></div>';
     document.body.appendChild(el);
     el.querySelector('#k-ep').value = GM_getValue(K.ep, '');
     el.querySelector('#k-tok').value = GM_getValue(K.tok, '');
     el.querySelector('#k-pins').value = getJSON(K.pins, []).join(', ');
-    el.querySelector('#k-ep').onchange = (e) => GM_setValue(K.ep, e.target.value.trim());
-    el.querySelector('#k-tok').onchange = (e) => GM_setValue(K.tok, e.target.value.trim());
+    el.querySelector('#k-year').value = GM_getValue(K.year, new Date().getFullYear());
+    el.querySelector('#k-ep').onchange = (event) => GM_setValue(K.ep, event.target.value.trim());
+    el.querySelector('#k-tok').onchange = (event) => GM_setValue(K.tok, event.target.value.trim());
+    el.querySelector('#k-year').onchange = (event) => GM_setValue(K.year, event.target.value);
+    el.querySelector('#k-overview').onchange = (event) => readOverview(event.target.files && event.target.files[0]);
+    el.querySelector('#k-new').onclick = newBatch;
     el.querySelector('#k-dry').onclick = () => {
-      const n = collectIds().length;
-      status(n
-        ? 'Найдено видео: ' + n + '. Меньше, чем в «Публикациях»? Промотай список ниже и нажми снова. Иначе «Старт обход».'
-        : 'Открой «Публикации» и медленно промотай список до конца — потом сюда «Сухой прогон».');
+      const parsed = savePins();
+      const count = allIds().size;
+      status(count
+        ? 'Найдено ' + count + ' публикаций (каталог ' + catalogIds().size + ', закрепы ' + getJSON(K.pins, []).length + '). Сверь с TikTok перед стартом.' + (parsed.rejected ? ' Не распознано значений: ' + parsed.rejected + '.' : '')
+        : 'Каталог пуст. Вручную промотай «Публикации» до конца.');
       paint();
     };
     el.querySelector('#k-go').onclick = startWalk;
-    el.querySelector('#k-pinwalk').onclick = walkPins;
-    el.querySelector('#k-stop').onclick = () => { GM_setValue(K.mode, 'idle'); setJSON(K.queue, []); status('Обход остановлен'); paint(); };
+    el.querySelector('#k-resume').onclick = resumeWalk;
+    el.querySelector('#k-stop').onclick = stopWalk;
     el.querySelector('#k-up').onclick = () => upload(false);
     el.querySelector('#k-dl').onclick = download;
     paint();
   }
 
-  // --- запуск: на каждой загрузке монтируем UI; если идёт обход — ждём захват и шагаем дальше ---
   function boot() {
     mountUI();
+    if (!checkPageSafety()) return;
     if (GM_getValue(K.mode, 'idle') === 'walking') {
-      setTimeout(advance, rnd(5000, 9000)); // дать вкладке прогрузить аналитику + человеческий темп
+      if (!claimOwner()) {
+        status('Эта вкладка не продолжает обход: активна другая вкладка.');
+        paint();
+        return;
+      }
+      status('Страница загружена. Жду 15 секунд перед следующим шагом…');
+      setTimeout(completePageAndAdvance, PAGE_DELAY_MS);
     }
   }
+
+  initState();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();

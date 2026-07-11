@@ -3,7 +3,13 @@ from datetime import date
 
 from sqlalchemy import select
 
-from kontur.connectors.tiktok.sync import TikTokConnector
+import pytest
+
+from kontur.connectors.tiktok.sync import (
+    CaptureManifest,
+    TikTokCaptureRejected,
+    TikTokConnector,
+)
 from kontur.db import make_engine, make_session_factory
 from kontur.models import (
     Base, Channel, ChannelMetric, Content, ContentMetric, RawRecord, SyncRun,
@@ -48,7 +54,11 @@ def test_ingest_writes_channel_content_metrics_and_channel_days():
     assert cms[date(2026, 4, 28)].video_views == 342
     assert cms[date(2026, 4, 29)].comments == -1  # нетто-дельта
 
-    assert stats == {"channel": 1, "videos": 1, "metrics": 1, "channel_days": 2}
+    assert {key: stats[key] for key in ("channel", "videos", "metrics", "channel_days")} == {
+        "channel": 1, "videos": 1, "metrics": 1, "channel_days": 2,
+    }
+    assert stats["capture_complete"] is False  # legacy/CLI capture без полного манифеста
+    assert stats["overview_complete"] is True
     assert s.scalars(select(SyncRun)).one().status == "ok"
 
 
@@ -94,6 +104,75 @@ def test_idempotent_same_day_overwrites():
     s = factory()
     assert len(s.scalars(select(Content)).all()) == 1
     assert len(s.scalars(select(ContentMetric)).all()) == 1
+
+
+def test_sparse_same_day_retry_preserves_rich_fields():
+    factory = _factory()
+    TikTokConnector(
+        capture=[OVERVIEW_CALL, AUDIENCE_CALL], snapshot_date=SNAP
+    ).run(factory)
+    TikTokConnector(capture=[OVERVIEW_CALL], snapshot_date=SNAP).run(factory)
+
+    metric = factory().scalars(select(ContentMetric)).one()
+    assert metric.raw["audience"]["geo"]["BY"] == 0.34
+    assert metric.raw["traffic_sources"]["For You"] == 0.843
+
+
+def test_manifest_rejects_partial_or_shrinking_capture():
+    factory = _factory()
+    # Исторический каталог из трёх публикаций задаёт baseline для защиты от
+    # случайной заливки только части списка.
+    TikTokConnector(
+        capture=[OVERVIEW_CALL, AUDIENCE_CALL, ITEM_LIST_CALL], snapshot_date=SNAP
+    ).run(factory)
+
+    full = CaptureManifest(
+        batch_id="batch-full",
+        script_version="3.0",
+        expected_videos=3,
+        catalog_videos=3,
+        insight_videos=1,
+        complete=True,
+    )
+    with pytest.raises(TikTokCaptureRejected, match="богатая аналитика собрана не для всех"):
+        TikTokConnector(
+            capture=[OVERVIEW_CALL, AUDIENCE_CALL, ITEM_LIST_CALL],
+            snapshot_date=SNAP,
+            manifest=full,
+        ).run(factory)
+
+    one = CaptureManifest(
+        batch_id="batch-one",
+        script_version="3.0",
+        expected_videos=1,
+        catalog_videos=0,
+        insight_videos=1,
+        complete=True,
+        allow_catalog_shrink=True,
+    )
+    stats = TikTokConnector(
+        capture=[OVERVIEW_CALL, AUDIENCE_CALL],
+        pinned_ids={"777"},
+        snapshot_date=SNAP,
+        manifest=one,
+    ).run(factory)
+    assert stats["capture_complete"] is True and stats["expected_videos"] == 1
+
+    partial = CaptureManifest(
+        batch_id="batch-partial",
+        script_version="3.0",
+        expected_videos=1,
+        catalog_videos=0,
+        insight_videos=1,
+        complete=True,
+    )
+    with pytest.raises(TikTokCaptureRejected, match="каталог уменьшился"):
+        TikTokConnector(
+            capture=[OVERVIEW_CALL, AUDIENCE_CALL],
+            pinned_ids={"777"},
+            snapshot_date=SNAP,
+            manifest=partial,
+        ).run(factory)
 
 
 def test_overview_only_mode_with_explicit_channel():
