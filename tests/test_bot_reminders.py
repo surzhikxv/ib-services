@@ -289,7 +289,7 @@ def test_due_review_chat_ids_waits_week_after_latest_payment_and_only_sends_once
     assert due_review_chat_ids(now=now, session_factory=sf) == [501, 504]
 
 
-def test_send_due_review_reminders_uses_exact_copy_and_channel_url(monkeypatch):
+def test_send_due_review_reminders_randomizes_exact_copy_and_uses_channel_url(monkeypatch):
     from bot import reminders
 
     sent = []
@@ -303,22 +303,37 @@ def test_send_due_review_reminders_uses_exact_copy_and_channel_url(monkeypatch):
     monkeypatch.setattr(
         reminders,
         "record_review_reminder_sent",
-        lambda tg_id, **_kwargs: recorded.append(tg_id),
+        lambda tg_id, template_index, **_kwargs: recorded.append((tg_id, template_index)),
     )
 
     count = asyncio.run(reminders.send_due_review_reminders(
-        FakeBot(), now=datetime(2026, 7, 11, 12, tzinfo=timezone.utc)
+        FakeBot(),
+        now=datetime(2026, 7, 11, 12, tzinfo=timezone.utc),
+        chooser=lambda texts: texts[1],
     ))
 
     assert count == 1
-    assert recorded == [601]
+    assert recorded == [(601, 1)]
     chat_id, text, kwargs = sent[0]
     assert chat_id == 601
-    assert text == "Понравился курс?\n\nБудем рады твоему отзыву 😊"
+    assert text == (
+        "Ты можешь помочь другим стать лучше 🫵🏼\n\n"
+        "Оставь свой отзыв, если понравился курс"
+    )
     assert kwargs["parse_mode"] is None
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Оставить отзыв"
     assert button.url == "https://t.me/+sRRY-p-cVNRiN2Zi"
+
+
+def test_review_reminder_templates_preserve_both_requested_messages():
+    from bot.reminders import REVIEW_REMINDER_TEXTS
+
+    assert REVIEW_REMINDER_TEXTS == (
+        "Понравился курс?\n\nБудем рады твоему отзыву 😊",
+        "Ты можешь помочь другим стать лучше 🫵🏼\n\n"
+        "Оставь свой отзыв, если понравился курс",
+    )
 
 
 def test_record_review_reminder_makes_request_one_time(tmp_path):
@@ -348,11 +363,14 @@ def test_record_review_reminder_makes_request_one_time(tmp_path):
         session.commit()
 
     assert due_review_chat_ids(now=now, session_factory=sf) == [701]
-    record_review_reminder_sent(701, sent_at=now, session_factory=sf)
+    record_review_reminder_sent(701, 0, sent_at=now, session_factory=sf)
     assert due_review_chat_ids(now=now + timedelta(days=30), session_factory=sf) == []
 
     with sf() as session:
         event = session.scalar(select(Event).where(
             Event.event_type == REVIEW_REMINDER_EVENT_TYPE
         ))
-        assert event.raw == {"url": "https://t.me/+sRRY-p-cVNRiN2Zi"}
+        assert event.raw == {
+            "url": "https://t.me/+sRRY-p-cVNRiN2Zi",
+            "template": 1,
+        }

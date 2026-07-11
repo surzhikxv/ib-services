@@ -26,7 +26,11 @@ REMINDER_CALLBACK = "reminder:tariffs"
 DEFAULT_INTERVAL = timedelta(hours=48)
 REVIEW_REMINDER_EVENT_TYPE = "review_reminder"
 REVIEW_REMINDER_DELAY = timedelta(days=7)
-REVIEW_REMINDER_TEXT = "Понравился курс?\n\nБудем рады твоему отзыву 😊"
+REVIEW_REMINDER_TEXTS = (
+    "Понравился курс?\n\nБудем рады твоему отзыву 😊",
+    "Ты можешь помочь другим стать лучше 🫵🏼\n\n"
+    "Оставь свой отзыв, если понравился курс",
+)
 REVIEW_REMINDER_BUTTON = "Оставить отзыв"
 REVIEW_CHANNEL_URL = "https://t.me/+sRRY-p-cVNRiN2Zi"
 _FACTORY: sessionmaker | None = None
@@ -268,6 +272,7 @@ def due_review_chat_ids(
 
 def record_review_reminder_sent(
     tg_id: int,
+    template_index: int,
     *,
     sent_at: datetime | None = None,
     session_factory: sessionmaker | None = None,
@@ -296,7 +301,7 @@ def record_review_reminder_sent(
                 "event_type": REVIEW_REMINDER_EVENT_TYPE,
                 "occurred_at": when,
                 "source_id": subscriber.source_id,
-                "raw": {"url": REVIEW_CHANNEL_URL},
+                "raw": {"url": REVIEW_CHANNEL_URL, "template": template_index + 1},
             },
         )
         session.commit()
@@ -375,6 +380,7 @@ async def send_due_review_reminders(
     now: datetime | None = None,
     delay: timedelta = REVIEW_REMINDER_DELAY,
     limit: int = 100,
+    chooser: Callable[[Sequence[str]], str] = random.choice,
     session_factory: sessionmaker | None = None,
 ) -> int:
     """Send the one-time review request to buyers whose purchase is a week old."""
@@ -388,10 +394,12 @@ async def send_due_review_reminders(
     )
     sent = 0
     for tg_id in chat_ids:
+        text = chooser(REVIEW_REMINDER_TEXTS)
+        template_index = REVIEW_REMINDER_TEXTS.index(text)
         try:
             await bot.send_message(
                 tg_id,
-                REVIEW_REMINDER_TEXT,
+                text,
                 parse_mode=None,
                 reply_markup=review_reminder_keyboard(),
             )
@@ -408,6 +416,7 @@ async def send_due_review_reminders(
             await asyncio.to_thread(
                 record_review_reminder_sent,
                 tg_id,
+                template_index,
                 sent_at=current,
                 session_factory=session_factory,
             )
