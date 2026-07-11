@@ -1,7 +1,7 @@
 """TDD: аналитические вьюхи дашборда (воронка, выручка, KPI).
 
-Поверх известного набора (FakeClient из test_sync: 4 подписчика, 2 платящих,
-3 оплаты — базовый/стандарт/премиум). Вьюхи портируемы (SQLite ↔ Postgres).
+Поверх продуктового набора: 4 пользователя собственного бота, 2 покупателя,
+3 оплаты — базовый/стандарт/премиум. Вьюхи портируемы (SQLite ↔ Postgres).
 """
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
@@ -9,9 +9,8 @@ from sqlalchemy.pool import StaticPool
 from kontur.dashboard.catalog import CARDS
 from kontur.dashboard.views import VIEWS, create_views
 from kontur.db import init_db, make_session_factory
-from kontur.connectors.bothelp.sync import sync_bothelp
 from kontur.models import Tariff
-from tests.test_sync import FakeClient
+from tests.funnel_seed import seed_funnel_analytics
 
 
 def _seeded_db():
@@ -20,7 +19,7 @@ def _seeded_db():
     )
     init_db(engine)
     factory = make_session_factory(engine)
-    sync_bothelp(FakeClient(), factory, bot_referral="REF")
+    seed_funnel_analytics(factory)
     create_views(engine)
     return engine, factory
 

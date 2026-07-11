@@ -21,18 +21,18 @@ def _factory():
 
 def test_webhook_stored_as_raw_record():
     factory = _factory()
-    record_webhook(factory, "bothelp", {"id": "evt-1", "type": "payment"})
+    record_webhook(factory, "crm", {"id": "evt-1", "type": "payment"})
     with factory() as s:
         row = s.scalar(select(RawRecord).where(RawRecord.entity_type == "webhook"))
-        assert row.source_system == "bothelp"
+        assert row.source_system == "crm"
         assert row.external_id == "evt-1"
         assert row.payload["type"] == "payment"
 
 
 def test_same_event_id_is_idempotent():
     factory = _factory()
-    record_webhook(factory, "bothelp", {"id": "evt-1", "type": "payment"})
-    record_webhook(factory, "bothelp", {"id": "evt-1", "type": "payment"})
+    record_webhook(factory, "crm", {"id": "evt-1", "type": "payment"})
+    record_webhook(factory, "crm", {"id": "evt-1", "type": "payment"})
     with factory() as s:
         n = s.scalar(select(func.count()).select_from(RawRecord))
     assert n == 1
@@ -49,29 +49,29 @@ def test_payload_without_id_falls_back_to_content_hash():
 
 def test_generic_webhook_is_disabled_without_server_token():
     assert not webhook_authorized(
-        "bothelp",
+        "crm",
         "request-token",
         expected_token="",
-        allowed_sources="bothelp",
+        allowed_sources="crm",
     )
 
 
 def test_generic_webhook_requires_matching_token_and_allowed_source():
     assert webhook_authorized(
-        "bothelp",
+        "crm",
         "request-token",
         expected_token="request-token",
-        allowed_sources="bothelp, crm",
+        allowed_sources="crm, marketing",
     )
     assert not webhook_authorized(
         "crm",
         "wrong-token",
         expected_token="request-token",
-        allowed_sources="bothelp, crm",
+        allowed_sources="crm, marketing",
     )
     assert not webhook_authorized(
         "prodamus",
         "request-token",
         expected_token="request-token",
-        allowed_sources="bothelp, crm",
+        allowed_sources="crm, marketing",
     )

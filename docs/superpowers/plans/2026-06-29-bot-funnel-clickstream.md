@@ -21,7 +21,7 @@
 - Бот-side эмиссия best-effort: всё обёрнуто `_emit` (`asyncio.to_thread` + глотание ошибок); воронка и ответ вебхуку Prodamus НЕ должны блокироваться.
 - Тесты: `./.venv/bin/python -m pytest`. In-memory SQLite: `create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)` + `init_db(engine)` (сеет stages/tariffs) — как в `tests/test_ingest.py:9-12`.
 - TDD: сначала падающий тест, потом минимальная реализация, коммит на задачу. Каждый коммит завершается трейлером `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
-- НЕ трогать `kontur/connectors/bothelp/` (мёртв).
+- НЕ трогать `kontur/connectors/legacy_funnel/` (мёртв).
 
 ---
 

@@ -1,8 +1,7 @@
-"""Приёмник живых событий (вебхуки BotHelp/Prodamus) → сырое озеро.
+"""Generic authenticated webhook receiver → raw data lake.
 
-Каркас: складываем payload как есть, разбор в события воронки — отдельным шагом
-(как и пакетная выгрузка через connectors.bothelp.sync). Идемпотентность по id
-события, а при его отсутствии — по хэшу содержимого.
+The endpoint stores an allow-listed payload idempotently. Prodamus uses the bot's
+dedicated HMAC-verified webhook instead.
 """
 from __future__ import annotations
 

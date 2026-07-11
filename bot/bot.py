@@ -1,18 +1,17 @@
-"""Живой aiogram-бот воронки BotHelp на Telegram.
+"""Production aiogram bot with the owned Telegram funnel.
 
 Запуск:
     export TELEGRAM_BOT_TOKEN=123456:ABC...
     python -m bot.bot
 
 После /start бот ведёт человека по воронке: приветствие → видео → выбор пакета →
-инфо о пакете → оплата. Переходы по кнопкам восстановлены из сырья BotHelp
-(bot/routing.py), контент шагов — дословный (bot/content.py).
+инфо о пакете → оплата. Контент и явные переходы хранятся в `bot/funnel.json`.
 
 Оплата: ссылки задаются в bot/links.py (или через .env). Пока не заданы — кнопка
 «Оплата» показывает заглушку и воронка не ломается. Для прохода всей воронки до
 канала без реальной оплаты: BOT_SIMULATE_PAYMENT=1 python -m bot.bot
 
-Служебные команды для сверки контента 1:1 с BotHelp:
+Служебные команды для проверки контента:
     /all      — прислать контент всех 28 шагов подряд (с разделителями);
     /step N   — один шаг по индексу 0..27.
 """
@@ -55,7 +54,7 @@ from aiohttp import web
 
 from . import payments
 from .channel import approve_join_request, create_personal_invite, tariffs_for_chat_id
-from .content import RAW_PATH, Block, Step, load_steps
+from .content import FUNNEL_PATH, Block, Step, load_steps
 from .media import local_media_path
 from .links import SIMULATE_PAYMENT, PAYMENT_PLACEHOLDER, payment_url
 from .reminders import REMINDER_CALLBACK, reminders_enabled, run_reminder_loop
@@ -216,7 +215,7 @@ async def _send_persistent_message(
 
 
 async def send_block(bot: Bot, chat_id: int, step: Step, block_idx: int, block: Block) -> int:
-    """Отправить один блок шага как отдельное сообщение — дословно, как в BotHelp.
+    """Отправить один блок шага как отдельное сообщение из owned snapshot.
 
     Возвращает message_id отправленного сообщения (для авто-удаления при переходе).
     """
@@ -224,8 +223,7 @@ async def send_block(bot: Bot, chat_id: int, step: Step, block_idx: int, block: 
     if block.is_text:
         msg = await bot.send_message(chat_id, block.text, parse_mode=PARSE_MODE, reply_markup=kb)
         return msg.message_id
-    # Источник файла: ссылка из выгрузки BotHelp либо локальный файл (media.py) —
-    # для вложений, которые BotHelp отдал без ссылки (storageFileId=null, напр. шаг 7).
+    # Funnel media is tracked locally; remote links remain supported for generic blocks.
     link = block.media_link
     media = URLInputFile(link) if link else None
     if media is None:
@@ -661,8 +659,8 @@ async def _run() -> None:
             "Не задан TELEGRAM_BOT_TOKEN.\n"
             "Получите токен у @BotFather и: export TELEGRAM_BOT_TOKEN=...; python -m bot.bot"
         )
-    if not RAW_PATH.exists():
-        raise SystemExit(f"Нет сырья {RAW_PATH} — сначала выгрузите контент BotHelp: python -m bot.fetch")
+    if not FUNNEL_PATH.exists():
+        raise SystemExit(f"Нет snapshot воронки: {FUNNEL_PATH}")
 
     global STEPS, ROUTES
     STEPS = load_steps()

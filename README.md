@@ -1,149 +1,109 @@
 # Контур роста
 
-MVP системы аналитики и ИИ-курирования для инфобизнеса: **озеро данных + ИИ над ним**.
-Собираем данные всех каналов в одну базу → строим воронку от видео до оплаты → ИИ даёт
-разборы и рекомендации. Полный бриф — в [HANDOFF.md](HANDOFF.md).
+Production-система для курса Сергея Лапычева: собственная Telegram-воронка,
+озеро данных, коннекторы соцсетей, Metabase и ИИ-аналитика.
 
-Стек: Python / FastAPI · PostgreSQL · n8n (оркестрация) · Metabase (дашборд) · LLM по API.
+Стек: Python 3.12 · aiogram · FastAPI · PostgreSQL · n8n · Metabase · Docker Compose.
 
-## Статус (Phase 1, пункты 1–4 — готово)
+## Что работает
 
-- ✅ **Фундамент**: репозиторий, `docker-compose` (Postgres + n8n + Metabase + app), схема озера данных.
-- ✅ **Коннектор BotHelp на живых данных**: OAuth с авто-обновлением токена, выгрузка ботов,
-  подписчиков (курсорная пагинация), 28 шагов воронки; маппинг шагов в этапы; распознавание
-  тарифов и оплат по тегам; запись в озеро; CLI запуска. Идемпотентно (можно по расписанию).
-- ✅ **Дашборд Metabase**: аналитика как SQL-вьюхи поверх озера (воронка, выручка по тарифам/
-  источникам, KPI, динамика), каталог карточек, авто-провижининг через Metabase API + ручная
-  инструкция — см. [docs/metabase.md](docs/metabase.md).
-- ✅ **ИИ-аналитик**: дайджест данных → промпт → модель (Claude по умолчанию, провайдер сменяем) →
-  разбор/ответ в БД + Telegram. Считается на живых данных; сам вызов модели ждёт ключ клиента
-  (`ai report --show-prompt` работает уже сейчас) — см. [docs/ai-analyst.md](docs/ai-analyst.md).
-- 🟡 Каркасы: приём вебхуков (живые события), базовый класс коннектора, доставка в Telegram.
+- Собственный Telegram-бот: `/start` → знакомство → выбор тарифа → Prodamus → доступ в канал.
+- События воронки, подписчики и оплаты напрямую пишутся в PostgreSQL.
+- Напоминания неоплатившим каждые 48 часов.
+- Коннекторы Telegram-канала, VK, YouTube и ручной импорт TikTok.
+- Планировщик и контроль свежести через `kontur-sync.timer` и `/health/connectors`.
+- 11 карточек Metabase: KPI, воронка, деньги, динамика и состояние источников.
+- Единый versioned image в GHCR, deploy по immutable digest, backup и rollback.
 
-Дальше: остальные коннекторы (YouTube/VK/TG/TikTok/IG), поиск партнёров, мониторинг ниши, продакшн-деплой.
+Instagram и ИИ-отчёты требуют внешних токенов владельца; код интеграций готов.
 
 ## Структура
 
-```
-kontur/
-  config.py                  настройки из .env
-  db.py                      движок, init схемы, сиды справочников, портируемый upsert
-  models.py                  СХЕМА ОЗЕРА (источник истины): каналы, контент, источники,
-                             подписчики, тарифы, этапы/шаги воронки, события, оплаты, raw
-  webhooks.py                приём живых событий в сырое озеро (каркас)
-  api.py                     FastAPI: /health, POST /webhooks/{source}
-  cli.py                     CLI: db init | db schema | bothelp sync
-  connectors/
-    base.py                  базовый класс коннектора (каркас)
-    bothelp/
-      client.py              HTTP-клиент: OAuth + авто-рефреш токена + пагинация
-      mapping.py             ЧИСТАЯ логика: шаг→этап, тег→оплата/тариф, единая модель событий
-      sync.py                оркестрация выгрузки → озеро
-  dashboard/
-    views.py                 SQL-вьюхи аналитики (воронка, выручка, KPI) — портируемы
-    catalog.py               каталог карточек дашборда (источник истины)
-    metabase.py              провижининг Metabase по каталогу (+ чистые помощники)
-  ai/
-    digest.py                срез данных для модели (KPI, воронка, выручка, недели)
-    prompts.py               системный промпт + сборка разбора/вопроса
-    llm.py                   интерфейс LLMClient: AnthropicLLM (Claude) + FakeLLM; провайдер сменяем
-    analyst.py               generate_report / answer_question → ai_reports
-    telegram.py              формат разбора + отправка в Telegram (каркас)
+```text
 bot/
-  content.py                 парсер сырья BotHelp → шаги/блоки/кнопки (дословно, без правок)
-  render.py                  раскладка кнопок по рядам, тип кнопки (ссылка/заглушка)
-  preview.py                 оффлайн-превью 1:1 + побайтовая сверка с сырьём (без токена)
-  bot.py                     живой aiogram-бот: /all, /step N, /start
-  fetch.py                   выгрузка raw/bothelp_raw.json из BotHelp
-db/schema.sql                DDL озера для Postgres (сгенерирован из models.py)
-docs/metabase.md             как собрать дашборд (авто + руками)
-docs/ai-analyst.md           как работает ИИ-аналитик
-docs/bot.md                  перенос воронки BotHelp → aiogram (контент 1:1)
-tests/                       pytest (маппинг, клиент, синк, вебхуки, дашборд, ИИ, бот) — 87 тестов
-docker-compose.yml           Postgres + n8n + Metabase + app
+  funnel.json       versioned source of truth: тексты, кнопки и явные маршруты
+  bot.py            aiogram polling, воронка и post-payment UX
+  payments.py       ссылки и HMAC-проверка Prodamus
+  webhook.py        приём подтверждённых оплат
+  channel.py        персональные инвайты и join requests
+  reminders.py      напоминания неоплатившим
+  content.py        строгая загрузка funnel snapshot v1
+  routing.py        валидация явных маршрутов
+  media.py          локальные runtime-медиа
+kontur/
+  models.py         схема озера данных
+  ingest.py         события собственного Telegram-бота
+  automation.py     расписание и freshness monitoring
+  connectors/       Telegram-канал, VK, YouTube, TikTok, Instagram
+  dashboard/        SQL-вьюхи, каталог и provision Metabase
+  ai/               дайджест, промпты и LLM-аналитик
+ops/
+  deploy.sh         GHCR deploy + healthchecks + rollback
+  backup.sh         проверяемые backup PostgreSQL/Metabase/n8n
+  kontur-sync.*     systemd service/timer коннекторов
 ```
 
-## Запуск локально (без Docker)
-
-Проверено на macOS, Python 3.14. Сетевой слой на `httpx` (тащит certifi и поддержку SOCKS),
-поэтому не спотыкается о баг с сертификатами в python.org-сборках.
+## Локальный запуск
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/pip install -e ".[dev]"
+./.venv/bin/pip install -r requirements.lock
+./.venv/bin/pip install --no-deps -e .
+./.venv/bin/pip install pytest==9.1.0
+cp .env.example .env
 
-cp .env.example .env          # и заполнить BOTHELP_* (или они уже есть)
-
-./.venv/bin/python -m pytest                      # тесты
-./.venv/bin/python -m kontur.cli bothelp sync     # ВЫГРУЗКА BotHelp на живых данных
-./.venv/bin/python -m kontur.cli ai report --show-prompt   # дайджест+промпт ИИ (без ключа)
+./.venv/bin/python -m pytest -q
+./.venv/bin/python -m bot.preview
+./.venv/bin/python -m kontur.cli automation status
 ```
 
-Без `DATABASE_URL` данные пишутся в `data/kontur.sqlite` — удобно для проверки.
-`bothelp sync` сам создаёт схему и сиды, повторный запуск не плодит дублей.
+Без `DATABASE_URL` используется `data/kontur.sqlite`.
 
-## Запуск через Docker (боевой контур)
+Запуск собственного бота:
+
+```bash
+export TELEGRAM_BOT_TOKEN=...
+python -m bot.bot
+```
+
+## Docker
 
 ```bash
 docker build --build-arg VCS_REF=local -t kontur-app:latest .
 docker compose up -d
-docker compose run --rm app python -m kontur.cli bothelp sync
+docker compose run --rm app python -m kontur.cli automation status
 ```
 
-- API: http://localhost:8000/health, вебхуки — `POST /webhooks/bothelp`
-- n8n: http://localhost:5678 · Metabase: http://localhost:3000 (подключить как источник
-  наш Postgres: host `postgres`, БД из `.env`)
-- Продовые backups, разделение прав, hardening и восстановление: [docs/operations.md](docs/operations.md).
-- CI-сборка единого image в GHCR, deploy по immutable digest и автоматический rollback:
-  [docs/deploy.md](docs/deploy.md).
+- API: `http://localhost:8000/health`
+- Свежесть источников: `http://localhost:8000/health/connectors`
+- Prodamus webhook: `http://localhost:8081/prodamus`
+- n8n: `http://localhost:5678`
+- Metabase: `http://localhost:3000`
 
-## Схема озера данных
+## Данные
 
-Единая событийная модель: всё, что происходит с человеком по пути «контент → бот → оплата»,
-ложится в `events` (тип, время, этап/шаг воронки, тариф, источник). Нормализованные сущности —
-`channels / content / sources / subscribers / tariffs / funnel_stages / funnel_steps / payments`,
-сырьё коннекторов — `raw_records`, журнал выгрузок — `sync_runs`.
+Путь человека «контент → Telegram-бот → тариф → оплата» хранится в единой модели:
 
-DDL: [`db/schema.sql`](db/schema.sql). Перегенерировать: `python -m kontur.cli db schema > db/schema.sql`.
+- `subscribers`, `events`, `payments` — воронка и деньги;
+- `channels`, `content`, `content_metrics`, `channel_metrics` — соцсети;
+- `sources` — deep-link/UTM атрибуция;
+- `sync_runs` — состояние коннекторов;
+- `ai_reports` — сохранённые аналитические разборы.
 
-## BotHelp: как устроена выгрузка
-
-- Аналитику воронки BotHelp по API не отдаёт — **строим её у себя** из подписчиков/тегов.
-- **Тарифы и оплаты распознаём по тегам** вида `купил_базовый` / `купил_стандарт` / `купил_премиум_`
-  (один подписчик может купить несколько тарифов → несколько оплат).
-- 28 шагов бота «Курс» маппятся в этапы: `welcome → package_choice → package_info → checkout
-  (премиум/базовый/стандарт) → paid → churn`, служебные (`Действия/Сообщение/Задержка`) → `service`.
-- Точное время и сумму оплаты добираем **вебхуком** (Prodamus внутри BotHelp) — каркас готов.
-
-## Бот: воронка BotHelp → Telegram (aiogram)
-
-Пакет `bot/` — рабочая воронка на aiogram. После `/start` бот ведёт человека по шагам
-(приветствие → видео → выбор пакета → инфо → оплата); контент шагов перенесён из BotHelp
-дословно (тексты MarkdownV2, кнопки, вложения), переходы восстановлены из сырья. Подробно —
-[docs/bot.md](docs/bot.md).
+DDL генерируется из `kontur/models.py`:
 
 ```bash
-./.venv/bin/pip install -e ".[bot]"
-
-python -m bot.fetch      # выгрузить сырьё BotHelp в raw/ (данные клиента, не в гит)
-python -m bot.preview    # проверка контента 1:1 без токена: текст+кнопки+вложения, побайтовая сверка
-
-export TELEGRAM_BOT_TOKEN=...   # токен у @BotFather
-python -m bot.bot        # воронка по /start; служебные /all (все шаги), /step N (один)
+python -m kontur.cli db schema --dialect postgresql
 ```
 
-Оплата — **Prodamus**: кнопка «Оплата» ведёт на платёжную ссылку с зашитым `order_id`
-(tg_id+тариф); после оплаты бот принимает вебхук (проверка HMAC-подписи), пишет оплату в
-озеро, шлёт страницу «оплачено» и выдаёт доступ в канал. Настройка в `.env`
-(`PRODAMUS_DOMAIN` / `PRODAMUS_SECRET` / `PUBLIC_BASE_URL`), детали и шаги запуска «вживую»
-(туннель, доступ в канал) — в [docs/bot.md](docs/bot.md). Для прохода воронки без оплаты:
-`BOT_SIMULATE_PAYMENT=1 python -m bot.bot`.
+## Документация
 
-> На dev-машине бот сам ходит в Telegram через локальный прокси из окружения
-> (`ALL_PROXY`/`HTTPS_PROXY`) и берёт сертификаты из `certifi`; на сервере без прокси — прямое
-> соединение. Явно задать: `TELEGRAM_PROXY=socks5://…`.
-
-## Безопасность
-
-Креды BotHelp — только в локальном `.env` (в git не попадает). Перевыпуск:
-BotHelp → Настройки → Интеграции → Open API → «ОБНОВИТЬ».
+- [Telegram-воронка и Prodamus](docs/bot.md)
+- [Deploy и rollback](docs/deploy.md)
+- [Backups, безопасность и синхронизация](docs/operations.md)
+- [Metabase](docs/metabase.md)
+- [ИИ-аналитик](docs/ai-analyst.md)
+- [YouTube OAuth](docs/connectors/yt-oauth-bootstrap.py)
+- [VK access](docs/connectors/vk-access.md)
+- [TikTok import](docs/connectors/tiktok-access.md)
+- [Instagram access](docs/instagram-token-runbook.md)

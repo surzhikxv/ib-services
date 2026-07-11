@@ -39,9 +39,9 @@ async def webhook(
     payload: dict,
     x_kontur_token: str | None = Header(default=None),
 ) -> dict:
-    """Приём живого события от источника (bothelp/prodamus/...) в сырое озеро."""
+    """Приём живого события от явно разрешённого внешнего источника в сырое озеро."""
     expected = os.getenv("WEBHOOK_INGEST_TOKEN", "")
-    allowed = os.getenv("WEBHOOK_ALLOWED_SOURCES", "bothelp")
+    allowed = os.getenv("WEBHOOK_ALLOWED_SOURCES", "")
     if not webhook_authorized(
         source,
         x_kontur_token,

@@ -1510,7 +1510,7 @@ Expected: all PASS.
 - [ ] **Step 2: Run the entire repo suite (no regressions)**
 
 Run: `pytest -q`
-Expected: all PASS (existing vk/tiktok/bothelp tests unaffected).
+Expected: all PASS (existing vk/tiktok/legacy_funnel tests unaffected).
 
 - [ ] **Step 3: Lint (match repo tooling; skip if ruff not configured)**
 

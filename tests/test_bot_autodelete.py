@@ -13,13 +13,6 @@ import pytest
 
 pytest.importorskip("aiogram")  # бот зависит от aiogram
 
-from bot.content import RAW_PATH  # noqa: E402
-
-pytestmark = pytest.mark.skipif(
-    not RAW_PATH.exists(), reason="нет raw/bothelp_raw.json — запустите python -m bot.fetch"
-)
-
-
 class FakeBot:
     """Минимальный стенд: считает отправленные/удалённые сообщения, выдаёт растущие id."""
 

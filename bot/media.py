@@ -1,17 +1,12 @@
-"""Локальные медиа-override для блоков без файла в публичной выгрузке BotHelp.
-
-Часть вложений BotHelp отдаёт без ссылки на файл (``storageFileId=null``) — напр.
-видео-приветствие шага 7. Сам файл есть у нас локально; здесь мы сопоставляем
-``(шаг, блок)`` с путём к файлу на диске. Сырьё и парсер при этом не трогаем (там всё
-дословно, см. bot/content.py) — это слой логики поверх, как и маршруты в bot/routing.py.
+"""Tracked local media mapped to funnel blocks.
 
 Где лежит файл:
-  • по умолчанию — каталог ``media/`` рядом с проектом (в гит не коммитим: данные клиента);
+  • по умолчанию — каталог ``media/`` рядом с проектом;
   • каталог можно сменить через ``BOT_MEDIA_DIR``;
   • конкретный файл — через свою переменную окружения (см. _OVERRIDES), она важнее каталога.
 
-На сервере файл нужно положить рядом так же (или указать путь через .env) — иначе бот
-аккуратно покажет заглушку, а не упадёт.
+Оба штатных файла версионируются вместе с проектом. Переменные окружения нужны
+только для осознанной подмены; при отсутствии файла бот покажет заглушку.
 """
 from __future__ import annotations
 
@@ -25,14 +20,15 @@ def _media_dir() -> Path:
     return Path(os.getenv("BOT_MEDIA_DIR", str(PROJECT_ROOT / "media")))
 
 
-# (step_index, block_index) → (имя env-переменной с путём, имя файла по умолчанию в media/).
+# (step_index, block_index) → (optional env override, tracked default filename).
 _OVERRIDES: dict[tuple[int, int], tuple[str, str]] = {
-    (7, 1): ("WELCOME_VIDEO_PATH", "welcome.mp4"),  # видео-приветствие — нет в выгрузке BotHelp
+    (1, 1): ("INTRO_NOTE_PATH", "intro_note.mp4"),
+    (7, 1): ("WELCOME_VIDEO_PATH", "welcome.mp4"),
 }
 
 
 def local_media_path(step_index: int, block_index: int) -> Path | None:
-    """Путь к локальному файлу для блока без ссылки в выгрузке — если он настроен и существует.
+    """Return a configured local file for the funnel block, when it exists.
 
     Возвращает None, если для блока нет override либо файл не найден на диске
     (тогда бот покажет заглушку, не падая).

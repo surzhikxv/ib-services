@@ -2,7 +2,7 @@
 
     python -m kontur.cli db init                 # создать схему + сиды
     python -m kontur.cli db schema [--dialect postgresql]  # вывести DDL
-    python -m kontur.cli bothelp sync            # выгрузить BotHelp на живых данных
+    python -m kontur.cli automation status       # свежесть источников
 """
 from __future__ import annotations
 
@@ -41,29 +41,6 @@ def _cmd_db_schema(args) -> int:
     for table in Base.metadata.sorted_tables:
         parts.append(str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
     print(("\n\n").join(parts))
-    return 0
-
-
-def _cmd_bothelp_sync(args) -> int:
-    from kontur.connectors.bothelp.client import BotHelpClient
-    from kontur.connectors.bothelp.sync import sync_bothelp
-
-    settings = get_settings()
-    if not settings.bothelp_client_id or not settings.bothelp_bot_referral:
-        print("ERROR: заполни BOTHELP_* в .env", file=sys.stderr)
-        return 2
-
-    engine = make_engine(settings.database_url)
-    init_db(engine)
-    factory = make_session_factory(engine)
-    with BotHelpClient(
-        client_id=settings.bothelp_client_id,
-        client_secret=settings.bothelp_client_secret,
-        oauth_url=settings.bothelp_oauth_url,
-        api_base=settings.bothelp_api_base,
-    ) as client:
-        stats = sync_bothelp(client, factory, bot_referral=settings.bothelp_bot_referral)
-    print("BotHelp sync OK →", json.dumps(stats, ensure_ascii=False))
     return 0
 
 
@@ -455,9 +432,6 @@ def build_parser() -> argparse.ArgumentParser:
     schema = db.add_parser("schema", help="вывести DDL")
     schema.add_argument("--dialect", default="postgresql", choices=["postgresql", "sqlite"])
     schema.set_defaults(func=_cmd_db_schema)
-
-    bh = sub.add_parser("bothelp", help="коннектор BotHelp").add_subparsers(dest="action", required=True)
-    bh.add_parser("sync", help="выгрузить данные BotHelp в озеро").set_defaults(func=_cmd_bothelp_sync)
 
     vk = sub.add_parser("vk", help="коннектор ВКонтакте").add_subparsers(dest="action", required=True)
     vk.add_parser("sync", help="выгрузить посты и метрики VK в озеро").set_defaults(func=_cmd_vk_sync)

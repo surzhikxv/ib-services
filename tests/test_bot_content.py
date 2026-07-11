@@ -1,21 +1,10 @@
-"""Контракт переноса контента BotHelp → aiogram: дословность и структура.
-
-Тесты пропускаются, если нет сырья raw/bothelp_raw.json (данные клиента, не в гите).
-Выгрузить: `python -m bot.fetch`.
-"""
+"""Contract of the owned funnel snapshot: exact copy and structure."""
 from __future__ import annotations
 
 import json
 
-import pytest
-
-from bot.content import RAW_PATH, load_steps
+from bot.content import FUNNEL_PATH, load_steps
 from bot.render import button_kind, rows_for
-
-pytestmark = pytest.mark.skipif(
-    not RAW_PATH.exists(), reason="нет raw/bothelp_raw.json — запустите python -m bot.fetch"
-)
-
 
 def test_28_steps_11_content_17_stubs():
     steps = load_steps()
@@ -27,15 +16,14 @@ def test_28_steps_11_content_17_stubs():
 
 
 def test_texts_match_source_byte_for_byte():
-    """Текст, который отправит бот, побайтово совпадает с message.text из сырья."""
-    raw = json.loads(RAW_PATH.read_text(encoding="utf-8"))
-    raw_steps = raw["steps"]
+    """Runtime text matches the versioned snapshot byte-for-byte."""
+    raw_steps = json.loads(FUNNEL_PATH.read_text(encoding="utf-8"))["steps"]
     checked = 0
     for step in load_steps():
-        raw_blocks = (raw_steps[step.index].get("flowData") or {}).get("steps") or []
+        raw_blocks = raw_steps[step.index].get("blocks") or []
         for bi, block in enumerate(step.blocks):
             if block.is_text:
-                assert block.text == (raw_blocks[bi].get("message") or {}).get("text")
+                assert block.text == raw_blocks[bi].get("text")
                 checked += 1
     assert checked == 11
 
@@ -56,7 +44,7 @@ def test_buttons_preserved_in_order_and_layout():
 
 def test_web_url_buttons_classified():
     steps = load_steps()
-    # «Оплата» — динамическая переменная {%payment%}: ссылка-заглушка (логика позже)
+    # «Оплата» — runtime generates a personal Prodamus link.
     pay = steps[2].blocks[0].buttons[0]
     assert pay.is_url and not pay.has_real_url
     assert button_kind(pay) == "pending"
@@ -66,13 +54,12 @@ def test_web_url_buttons_classified():
     assert button_kind(chan) == "url"
 
 
-def test_video_note_has_link_and_video_is_missing():
+def test_funnel_media_is_local_and_has_no_external_link():
     steps = load_steps()
-    # Шаг 1, блок 1 — video_note с реальной ссылкой
+    # Both media blocks are served from tracked local files.
     vn = steps[1].blocks[1]
     assert vn.media_type == "video_note"
-    assert vn.media_link and vn.media_link.endswith("video2.mp4")
-    # Шаг 7, блок 1 — video без файла (storageFileId=null): не выдумываем медиа
+    assert vn.media_link is None
     vid = steps[7].blocks[1]
     assert vid.media_type == "video"
     assert vid.media_link is None

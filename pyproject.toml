@@ -20,7 +20,7 @@ dependencies = [
 api = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 postgres = ["psycopg[binary]>=3.1"]
 ai = ["anthropic>=0.40"]   # ИИ-аналитик (Claude); провайдер сменяем — см. kontur/ai/llm.py
-bot = ["aiogram>=3.13", "aiohttp-socks>=0.8"]  # воронка BotHelp → Telegram-бот (пакет bot/); socks — для dev-прокси
+bot = ["aiogram>=3.13", "aiohttp-socks>=0.8"]  # собственная Telegram-воронка; socks — для dev-прокси
 telegram = ["telethon>=1.44.0", "PySocks>=1.7"]
 dev = ["pytest>=8"]
 

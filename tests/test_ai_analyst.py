@@ -7,8 +7,7 @@ from kontur.ai.llm import FakeLLM
 from kontur.ai.prompts import SYSTEM_PROMPT
 from kontur.db import init_db, make_session_factory
 from kontur.models import AiReport
-from kontur.connectors.bothelp.sync import sync_bothelp
-from tests.test_sync import FakeClient
+from tests.funnel_seed import seed_funnel_analytics
 
 
 def _seeded_factory():
@@ -17,7 +16,7 @@ def _seeded_factory():
     )
     init_db(engine)
     factory = make_session_factory(engine)
-    sync_bothelp(FakeClient(), factory, bot_referral="REF")
+    seed_funnel_analytics(factory)
     return factory
 
 

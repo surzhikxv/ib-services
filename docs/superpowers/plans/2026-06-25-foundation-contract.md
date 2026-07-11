@@ -4,7 +4,7 @@
 
 **Goal:** Build the shared foundation every channel connector (VK, Telegram-channel, TikTok, Instagram, YouTube) depends on: a real `Connector` base class, a `content_metric` time-series table, an OAuth token store, a canonical UTM normalizer, and one safe httpx client builder.
 
-**Architecture:** Extend the existing data lake (`kontur/models.py` is the source of truth; `Base.metadata.create_all` builds the schema, no Alembic) with two new tables and one column, then replace the empty `Connector` skeleton with a template-method base that owns the `SyncRun` lifecycle and raw-landing — mirroring the proven `sync_bothelp` flow so each connector only writes fetch+map+upsert. Two small shared helpers (UTM normalization, httpx client) remove the two cross-cutting bugs the design review flagged.
+**Architecture:** Extend the existing data lake (`kontur/models.py` is the source of truth; `Base.metadata.create_all` builds the schema, no Alembic) with two new tables and one column, then replace the empty `Connector` skeleton with a template-method base that owns the `SyncRun` lifecycle and raw-landing — mirroring the proven `sync_legacy_funnel` flow so each connector only writes fetch+map+upsert. Two small shared helpers (UTM normalization, httpx client) remove the two cross-cutting bugs the design review flagged.
 
 **Tech Stack:** Python 3.14, SQLAlchemy 2.x (Mapped/mapped_column), httpx, pytest. Local tests run on in-memory SQLite; prod is Postgres.
 
@@ -16,7 +16,7 @@
 - `String(500)` is the cap for `content.title`/`content.url` — connectors truncate; not this plan's concern but the column stays 500.
 - Test runner: `python -m pytest` (use `./.venv/bin/python -m pytest` if venv not activated).
 - TDD: failing test first, minimal impl, commit per task.
-- BotHelp connector is dead (no longer run) and is NOT migrated onto the new base — leave `kontur/connectors/bothelp/` untouched.
+- legacy funnel platform connector is dead (no longer run) and is NOT migrated onto the new base — leave `kontur/connectors/legacy_funnel/` untouched.
 
 ---
 
@@ -411,12 +411,12 @@ class Connector(ABC):
         return datetime.fromtimestamp(int(unix), tz=timezone.utc)
 ```
 
-> **Why the up-front `session.commit()` (B1, verified):** without it, `run()` only `flush()`es the "running" row; on an `ingest` exception the `session.rollback()` discards that un-committed INSERT, so `session.get(SyncRun, run.id)` returns `None`, the error is never stamped, and `sync_runs` is empty — `test_run_records_error_and_reraises` then errors on `.one()` (`NoResultFound`). The same latent bug exists in `kontur/connectors/bothelp/sync.py:52-54,191-199` (flush-only) but was never caught because `tests/test_sync.py` has no error-path test. BotHelp is dead so we don't fix it there; the new base does it right.
+> **Why the up-front `session.commit()` (B1, verified):** without it, `run()` only `flush()`es the "running" row; on an `ingest` exception the `session.rollback()` discards that un-committed INSERT, so `session.get(SyncRun, run.id)` returns `None`, the error is never stamped, and `sync_runs` is empty — `test_run_records_error_and_reraises` then errors on `.one()` (`NoResultFound`). The same latent bug exists in `kontur/connectors/legacy_funnel/sync.py:52-54,191-199` (flush-only) but was never caught because `tests/test_sync.py` has no error-path test. legacy funnel platform is dead so we don't fix it there; the new base does it right.
 
 - [ ] **Step 4: Run tests + full suite (base.py is shared)**
 
 Run: `python -m pytest tests/test_base_connector.py -v && python -m pytest`
-Expected: new tests PASS; full suite still green (BotHelp untouched — nothing imports the old skeleton; `git grep` confirms no importers/subclasses/`.sync()` call sites). Baseline before this plan is **106 passed**.
+Expected: new tests PASS; full suite still green (legacy funnel platform untouched — nothing imports the old skeleton; `git grep` confirms no importers/subclasses/`.sync()` call sites). Baseline before this plan is **106 passed**.
 
 - [ ] **Step 5: Commit**
 
@@ -434,7 +434,7 @@ git commit -m "feat(connectors): real Connector template-method base (SyncRun li
 - Test: `tests/test_utm.py`
 
 **Interfaces:**
-- Produces: `normalize_utm(params: dict) -> str` — accepts platform-native (`utm_source`) or camel (`utmSource`) keys, maps to the canonical camel vocabulary, drops empties, and returns `"|".join(f"{k}={v}" for k,v in sorted(...))` — byte-identical to the existing subscriber-side code format (`sync_bothelp` line 107). Also `UTM_KEY_MAP` dict for reference. Content connectors and any funnel source build `Source.code` through this so content-side and subscriber-side codes collide on the same `(kind="utm", code)`.
+- Produces: `normalize_utm(params: dict) -> str` — accepts platform-native (`utm_source`) or camel (`utmSource`) keys, maps to the canonical camel vocabulary, drops empties, and returns `"|".join(f"{k}={v}" for k,v in sorted(...))` — byte-identical to the existing subscriber-side code format (`sync_legacy_funnel` line 107). Also `UTM_KEY_MAP` dict for reference. Content connectors and any funnel source build `Source.code` through this so content-side and subscriber-side codes collide on the same `(kind="utm", code)`.
 
 - [ ] **Step 1: Write the failing test**
 

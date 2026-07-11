@@ -1,15 +1,8 @@
-"""Контракт воронки: переходы кнопок восстановлены из сырья BotHelp верно."""
+"""Contract of explicit routes in the owned funnel snapshot."""
 from __future__ import annotations
 
-import pytest
-
-from bot.content import RAW_PATH, load_steps
+from bot.content import load_steps
 from bot.routing import ENTRY_STEP, build_routes
-
-pytestmark = pytest.mark.skipif(
-    not RAW_PATH.exists(), reason="нет raw/bothelp_raw.json — запустите python -m bot.fetch"
-)
-
 
 def test_entry_is_welcome():
     assert ENTRY_STEP == 0

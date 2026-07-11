@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make our live aiogram funnel bot (@kiggajbot) write funnel events (bot_start, step_enter, checkout, payment) directly into the lake `events` table, so the lake captures the funnel at the source. BotHelp is dead; the bot is the sole live source of funnel events.
+**Goal:** Make our live aiogram funnel bot (@kiggajbot) write funnel events (bot_start, step_enter, checkout, payment) directly into the lake `events` table, so the lake captures the funnel at the source. legacy funnel platform is dead; the bot is the sole live source of funnel events.
 
 **Architecture:** A new `kontur/ingest.py` first-party ingest API writes one `Event` per funnel action through the existing portable `upsert`, idempotent on `(source_system="telegram_bot", dedup_key)`, each call in its OWN committed session (so it never depends on a connector transaction). The bot calls these via a best-effort async wrapper (`asyncio.to_thread` + swallow) so a down/slow lake never blocks the funnel or the Prodamus 200 — mirroring the existing best-effort `_record_payment` (`bot/bot.py:280-310`).
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- `source_system = "telegram_bot"` for all bot-emitted events (distinct from the dead `"bothelp"`).
+- `source_system = "telegram_bot"` for all bot-emitted events (distinct from the dead `"legacy_funnel"`).
 - All writes go through `kontur.db.upsert(session, model, natural_key, values) -> (obj, created)`.
 - Idempotency keys (dedup_key), one per funnel action:
   - bot_start → `tg{tg_id}:bot_start`
@@ -21,7 +21,7 @@
 - Bot-side event emission MUST be best-effort: wrapped so any exception (lake down, schema missing) is logged and swallowed — the funnel and the Prodamus webhook response must never be blocked or broken.
 - Tests: `./.venv/bin/python -m pytest`. In-memory SQLite via `create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)` + `init_db(engine)` (seeds stages/tariffs), matching `tests/test_sync.py:43-47`.
 - TDD: failing test first, minimal impl, commit per task. The full suite is currently 120 passed — keep it green.
-- Do NOT touch `kontur/connectors/bothelp/` (dead).
+- Do NOT touch `kontur/connectors/legacy_funnel/` (dead).
 
 ---
 
@@ -105,7 +105,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'kontur.ingest'`
 # kontur/ingest.py
 """Прямая запись событий воронки в озеро из нашего бота (источник истины воронки).
 
-BotHelp как источник мёртв — события воронки пишет бот. Каждый вызов открывает
+legacy funnel platform как источник мёртв — события воронки пишет бот. Каждый вызов открывает
 СВОЮ сессию и коммитит сразу (независимо от вызывающего). Идемпотентность —
 по (source_system='telegram_bot', dedup_key). Вызовы — best-effort: вызывающий
 оборачивает их так, чтобы недоступность озера не ломала воронку.
@@ -322,7 +322,7 @@ git commit -m "feat(bot): emit funnel events to lake (best-effort) at start/step
 - Direct DB write (not webhook) → Task 1 `kontur/ingest.py`. ✅
 - event_type + dedup_key scheme (bot_start/step_enter/payment) → Global Constraints + Task 1 wrappers. ✅ (No `checkout` event: the pay-button click is unobservable with Prodamus URL buttons — see Global Constraints. `step_enter` on package-info steps is the checkout-intent signal.)
 - Subscriber upsert with `source_system="telegram_bot"` + `tg_user_id` → Task 1 `record_funnel_event`. ✅
-- BotHelp = dead, bot sole source → no BotHelp changes; distinct source_system. ✅
+- legacy funnel platform = dead, bot sole source → no legacy funnel platform changes; distinct source_system. ✅
 - Best-effort wrapping (`asyncio.to_thread` + swallow) so funnel/Prodamus never blocked → Task 2 `_emit`. ✅
 - Module-level engine/factory (not per-call) for the NEW event path → Task 1 `_default_factory`. ✅ The existing `_record_payment` is left UNTOUCHED and still builds an engine per call — that smell is out of scope here and is NOT fixed by this plan.
 

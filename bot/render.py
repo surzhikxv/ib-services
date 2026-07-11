@@ -41,8 +41,8 @@ def button_kind(button: Button) -> str:
     """Чем кнопка станет в Telegram:
 
       • "url"     — web_url с настоящей http(s)-ссылкой (рабочая кнопка-ссылка);
-      • "pending" — web_url с динамической переменной BotHelp ({%payment_N%}):
-                    реальный адрес подставляет логика, её доработаем позже;
+      • "pending" — платёжная web_url-кнопка без статического URL:
+                    runtime подставляет персональную Prodamus-ссылку;
       • "noop"    — postback-кнопка: подпись переносим дословно, переход — логика позже.
     """
     if button.is_url:

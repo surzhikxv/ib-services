@@ -20,7 +20,7 @@ digest вида `ghcr.io/surzhikxv/ib-services@sha256:...`. Compose запуск
 данные остаются вне Git:
 
 - `/opt/kontur/.env`, права `0600`;
-- `/opt/kontur/raw/bothelp_raw.json`;
+- `/opt/kontur/bot/funnel.json` входит в Git и поставляется внутри image;
 - дополнительные файлы в `/opt/kontur/media/`.
 
 `COMPOSE_PROJECT_NAME=kontur` и текущий `KONTUR_IMAGE` сохраняются в prod `.env`

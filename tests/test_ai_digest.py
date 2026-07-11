@@ -4,8 +4,7 @@ from sqlalchemy.pool import StaticPool
 
 from kontur.ai.digest import build_digest
 from kontur.db import init_db, make_session_factory
-from kontur.connectors.bothelp.sync import sync_bothelp
-from tests.test_sync import FakeClient
+from tests.funnel_seed import seed_funnel_analytics
 
 
 def _seeded_factory():
@@ -14,7 +13,7 @@ def _seeded_factory():
     )
     init_db(engine)
     factory = make_session_factory(engine)
-    sync_bothelp(FakeClient(), factory, bot_referral="REF")
+    seed_funnel_analytics(factory)
     return factory
 
 

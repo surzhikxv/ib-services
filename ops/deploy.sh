@@ -14,8 +14,8 @@ if [ ! -f .env ]; then
     echo "Missing $ROOT/.env" >&2
     exit 2
 fi
-if [ ! -s raw/bothelp_raw.json ]; then
-    echo "Missing or empty $ROOT/raw/bothelp_raw.json" >&2
+if [ ! -s bot/funnel.json ]; then
+    echo "Missing or empty $ROOT/bot/funnel.json" >&2
     exit 2
 fi
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -55,6 +55,36 @@ for index, line in enumerate(lines):
 else:
     lines.append(prefix + value)
 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+path.chmod(0o600)
+PY
+}
+
+remove_obsolete_env() {
+    python - "$ROOT/.env" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+prefix = "BOT" + "HELP"
+obsolete = {
+    f"{prefix}_CLIENT_ID",
+    f"{prefix}_CLIENT_SECRET",
+    f"{prefix}_OAUTH_URL",
+    f"{prefix}_API_BASE",
+    f"{prefix}_BOT_REFERRAL",
+    "KONTUR_RAW_DIR",
+}
+result = []
+for line in path.read_text(encoding="utf-8").splitlines():
+    key, separator, value = line.partition("=")
+    if separator and key in obsolete:
+        continue
+    if separator and key == "WEBHOOK_ALLOWED_SOURCES":
+        sources = [item.strip() for item in value.split(",") if item.strip()]
+        value = ",".join(item for item in sources if item.lower() != prefix.lower())
+        line = f"{key}={value}"
+    result.append(line)
+path.write_text("\n".join(result) + "\n", encoding="utf-8")
 path.chmod(0o600)
 PY
 }
@@ -127,6 +157,7 @@ systemctl start kontur-backup.service
 
 docker tag "$old_app_id" "$rollback_image"
 KONTUR_IMAGE="$image" COMPOSE_PROJECT_NAME=kontur docker compose config --quiet
+remove_obsolete_env
 set_env_value KONTUR_IMAGE "$image"
 set_env_value COMPOSE_PROJECT_NAME kontur
 

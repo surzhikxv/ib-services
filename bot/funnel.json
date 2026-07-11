@@ -1,0 +1,523 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "index": 0,
+      "title": "Приветствие",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "Курс от Сергея Лапычева «СамоДвижение»\nЭто курс для тех, кто хочет лучше чувствовать своё тело, стать активнее и уделять больше внимания физическому состоянию при ДЦП\\.\n\nПрограмма курса была разработана специалистом\\-реабилитологом Муслимом Бурхановым\\. В данном курсе Сергей Лапычев, человек с ДЦП, самостоятельно выполняет упражнения в домашних условиях, в эффективности которых лично убедился с течением времени\\. Наш курс предоставляет Вам возможность обрести независимость и проявить самостоятельность\\.\n\nВнутри — домашние тренировки, упражнения и понятные объяснения, которые помогают не просто повторять движения, а лучше понимать работу с телом\\.\n\nВы получите\\:\n\n— видео с упражнениями, которые можно выполнять дома\n— рекомендации по ЛФК и тренировкам\n— разборы, как лучше работать с телом при ДЦП\n— прямые эфиры про физическое состояние, питание и образ жизни\n— возможность задать вопросы в закрытом чате\n\n\\*Это не медицинская услуга и не индивидуальная программа реабилитации\\. Перед началом занятий рекомендуется проконсультироваться со специалистом и учесть возможные противопоказания\\.\n\n_Примеры упражнений\\:_  [https\\://disk\\.yandex\\.ru/d/y6iNAQg_HL05jA_\\_](https://disk.yandex.ru/d/y6iNAQg_HL05jA)",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Мне интересно",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 7
+              }
+            }
+          ],
+          "button_distribution": [
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "title": "Выбор пакета",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "_Перед вами уникальная возможность стать лучшей версией себя\\. Выбирай подходящий пакет и будем двигаться вперёд вместе\\! Ролики будут расположены в удобном для тебя порядке, поэтому ты всегда сможешь вернуться к ним, чтобы повторить упражнения\\. Обязательно проконсультируйся со своим доктором, чтобы учесть все противопоказания\\! Доступ ко всем видео выдаётся сразу и навсегда\\. Можешь не переживать, что придётся долго ждать выхода новых тренировок\\! Желаю успехов\\!_\n_Выберите подходящий пакет\\:_\n«Базовый пакет» \\- 1699 руб\\.\n«Стандарт \\+» \\- 1990 руб\\.\n«Премиум» 2990 руб\\.",
+          "media": null,
+          "buttons": [
+            {
+              "title": "💚 Базовый пакет",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 2
+              }
+            },
+            {
+              "title": "⭐ Стандарт +",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 3
+              }
+            },
+            {
+              "title": "👑 Премиум пакет",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 4
+              }
+            },
+            {
+              "title": "Назад",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 7
+              }
+            }
+          ],
+          "button_distribution": [
+            3,
+            1
+          ],
+          "formatting": "markdown"
+        },
+        {
+          "media_type": "video_note",
+          "text": null,
+          "media": {
+            "name": "video2.mp4",
+            "size": 4873671
+          },
+          "buttons": [],
+          "button_distribution": null,
+          "formatting": null
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "title": "Инфо о пакетах 1",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "*💚 Базовый пакет 1699 руб\\.*\n\n✅ Доступ ко всем 19 видео курса с упражнениями и ЛФК, которые можно выполнять дома\n🎥 18 видеоуроков\n💰 Доступ сразу и навсегда\n\n_\\(При оплате номер счёта заполняется автоматически\\!\\)_",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Оплата",
+              "kind": "web_url",
+              "url": null,
+              "route": {
+                "kind": "pay",
+                "tariff": "basic"
+              }
+            },
+            {
+              "title": "Назад",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            }
+          ],
+          "button_distribution": [
+            1,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "title": "Инфо о пакетах 2",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "*⭐️ Стандарт \\+*\n*1990 руб\\.*\n\n✅ Всё из Базового пакета \\(19 видеоуроков\\)\n✅ Закрытый чат участников курса, где можно задавать вопросы\n✅ Прямые эфиры с Сергеем и реабилитологом Муслимом о тренировках, ЛФК, питании и образе жизни\n💰 Доступ к видео навсегда, чат и эфиры — навсегда 👑\n\n_\\(При оплате номер счёта заполняется автоматически\\!\\)_",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Оплата ",
+              "kind": "web_url",
+              "url": null,
+              "route": {
+                "kind": "pay",
+                "tariff": "standard"
+              }
+            },
+            {
+              "title": "Назад",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            }
+          ],
+          "button_distribution": [
+            1,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "title": "Инфо о пакетах 3",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "👑 *Премиум пакет*\n*2990 руб\\.*\n\n✅ Всё из Стандарт\\+ \\(видео, чат, прямые эфиры\\)\n✅ 2 персональные консультации по 45 минут, где можно разобрать свою ситуацию и задать любые вопросы\n💰 Максимальная поддержка и персональный подход\n\n_\\(При оплате номер счёта заполняется автоматически\\!\\)_",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Оплата",
+              "kind": "web_url",
+              "url": null,
+              "route": {
+                "kind": "pay",
+                "tariff": "premium"
+              }
+            },
+            {
+              "title": "Назад",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            }
+          ],
+          "button_distribution": [
+            1,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "title": "Оплата премиум",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "✅ Оплата прошла\\! Твой пакет активирован\\.\n📹 Уроки 1–19\n💬 Закрытый чат участников\n🎯 Запись на 2 личные консультации → @slapychev\\__work_\nДоступ к видео и чату навсегда\\. Консультации — подберём удобное время\\.",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Назад к пакетам",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            },
+            {
+              "title": "Перейти в канал",
+              "kind": "web_url",
+              "url": "https://t.me/+2j5w6SKgwUJmZjhi",
+              "route": {
+                "kind": "url",
+                "url": "https://t.me/+2j5w6SKgwUJmZjhi"
+              }
+            },
+            {
+              "title": "Подал заявку ✅ ",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "terminal"
+              }
+            }
+          ],
+          "button_distribution": [
+            2,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "title": "Оплата базовый",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "✅ Оплата прошла\\! Твой пакет Базовый активирован\\.\n📹 Уроки 1–19\n_Доступ к видео  навсегда_",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Назад к пакетам",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            },
+            {
+              "title": "Перейти в канал",
+              "kind": "web_url",
+              "url": "https://t.me/+j-t1VJcB6Qw0NTIy",
+              "route": {
+                "kind": "url",
+                "url": "https://t.me/+j-t1VJcB6Qw0NTIy"
+              }
+            },
+            {
+              "title": "Подал заявку ✅ ",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "terminal"
+              }
+            }
+          ],
+          "button_distribution": [
+            2,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "title": "Сообщение 9",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "⬇️ Смотреть приветствие можно ниже ⬇️",
+          "media": null,
+          "buttons": [],
+          "button_distribution": null,
+          "formatting": "markdown"
+        },
+        {
+          "media_type": "video",
+          "text": null,
+          "media": {
+            "storageFileId": null
+          },
+          "buttons": [
+            {
+              "title": "Продолжить",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            },
+            {
+              "title": "Назад",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 0
+              }
+            }
+          ],
+          "button_distribution": [
+            1,
+            1
+          ],
+          "formatting": null
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "title": "Оплата стандарт",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "✅ Оплата прошла\\! Твой пакет Стандарт активирован\\.\n📹 Уроки 1–19\n💬 Закрытый чат участников\n📺 Прямые эфиры доступны\nДоступ к видео и чату навсегда, чат и эфиры навсегда",
+          "media": null,
+          "buttons": [
+            {
+              "title": "Назад к пакетам",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "step",
+                "target": 1
+              }
+            },
+            {
+              "title": "Перейти в канал",
+              "kind": "web_url",
+              "url": "https://t.me/+2j5w6SKgwUJmZjhi",
+              "route": {
+                "kind": "url",
+                "url": "https://t.me/+2j5w6SKgwUJmZjhi"
+              }
+            },
+            {
+              "title": "Подал заявку ✅ ",
+              "kind": "postback",
+              "url": null,
+              "route": {
+                "kind": "terminal"
+              }
+            }
+          ],
+          "button_distribution": [
+            2,
+            1
+          ],
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "title": "Действия 1",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 10,
+      "title": "Действия 2",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 11,
+      "title": "Действия 3",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 12,
+      "title": "Действия 4",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 13,
+      "title": "Действия 6",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 14,
+      "title": "Действия 6 (копия)",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 15,
+      "title": "Действия 6 (копия)",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 16,
+      "title": "Действия 6 (копия) (копия)",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 17,
+      "title": "Действия 10",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 18,
+      "title": "Действия 10 (копия)",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 19,
+      "title": "Действия 10 (копия)",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 20,
+      "title": "удаление стандарт",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 21,
+      "title": "удаление база",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 22,
+      "title": "удаление премиум",
+      "kind": "action",
+      "blocks": []
+    },
+    {
+      "index": 23,
+      "title": "Сообщение 12",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "Похоже, ты немного выпал из тренировок\\.\n\nЭто нормально — главное не застревать в паузе надолго\\.\n\nВернись к курсу сегодня\\: выбери одно простое упражнение и просто начни\\. Даже 10 минут лучше, чем ничего\\.\n\n⬇️\n📸 Вернуться к тренировкам",
+          "media": null,
+          "buttons": [],
+          "button_distribution": null,
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "title": "Задержка 1",
+      "kind": "delay",
+      "blocks": []
+    },
+    {
+      "index": 25,
+      "title": "Сообщение 15",
+      "kind": "content",
+      "blocks": [
+        {
+          "media_type": "text",
+          "text": "Давно не занимался?\n\nНичего страшного\\. Главное — не останавливаться надолго\\.\nЗайди в курс и начни с малого\\.\n\n📷 Продолжить",
+          "media": null,
+          "buttons": [],
+          "button_distribution": null,
+          "formatting": "markdown"
+        }
+      ]
+    },
+    {
+      "index": 26,
+      "title": "Задержка 4",
+      "kind": "delay",
+      "blocks": []
+    },
+    {
+      "index": 27,
+      "title": "Действия 4 (копия)",
+      "kind": "action",
+      "blocks": []
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 #
 #   docker build --build-arg VCS_REF=local -t kontur-app:latest .
 #   docker compose up -d          # поднять локальный контур
-#   docker compose run --rm app python -m kontur.cli bothelp sync   # выгрузка BotHelp
+#   docker compose run --rm app python -m kontur.cli automation status
 #
 # Боевой запуск — на VPS. Креды берутся из .env (в git не попадает).
 
@@ -53,11 +53,6 @@ services:
       METABASE_PASSWORD: ${METABASE_PASSWORD:-}
       METABASE_DB_USER: ${METABASE_DB_USER:-metabase_ro}
       METABASE_DB_PASSWORD: ${METABASE_DB_PASSWORD:-}
-      BOTHELP_CLIENT_ID: ${BOTHELP_CLIENT_ID}
-      BOTHELP_CLIENT_SECRET: ${BOTHELP_CLIENT_SECRET}
-      BOTHELP_OAUTH_URL: ${BOTHELP_OAUTH_URL:-https://oauth.bothelp.io/oauth2/token}
-      BOTHELP_API_BASE: ${BOTHELP_API_BASE:-https://api.bothelp.io}
-      BOTHELP_BOT_REFERRAL: ${BOTHELP_BOT_REFERRAL}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-opus-4-8}
       LLM_EFFORT: ${LLM_EFFORT:-medium}
@@ -67,7 +62,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TIKTOK_INGEST_TOKEN: ${TIKTOK_INGEST_TOKEN:-}
       WEBHOOK_INGEST_TOKEN: ${WEBHOOK_INGEST_TOKEN:-}
-      WEBHOOK_ALLOWED_SOURCES: ${WEBHOOK_ALLOWED_SOURCES:-bothelp}
+      WEBHOOK_ALLOWED_SOURCES: ${WEBHOOK_ALLOWED_SOURCES:-}
       INSTAGRAM_AUTH_MODE: ${INSTAGRAM_AUTH_MODE:-instagram}
       INSTAGRAM_ACCESS_TOKEN: ${INSTAGRAM_ACCESS_TOKEN:-}
       INSTAGRAM_USER_ID: ${INSTAGRAM_USER_ID:-}
@@ -104,7 +99,6 @@ services:
       BOT_MEDIA_DIR: /app/media
     command: ["python", "-m", "bot.bot"]
     volumes:
-      - ${KONTUR_RAW_DIR:-./raw}:/app/raw:ro
       - ${KONTUR_MEDIA_DIR:-./media}:/app/media:ro
     ports:
       - "127.0.0.1:${PRODAMUS_WEBHOOK_PORT:-8081}:8081"

@@ -52,7 +52,7 @@ class RawRecord(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("source_system", "entity_type", "external_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    source_system: Mapped[str] = mapped_column(String(50))  # bothelp, youtube, ...
+    source_system: Mapped[str] = mapped_column(String(50))  # telegram_bot, youtube, ...
     entity_type: Mapped[str] = mapped_column(String(50))     # bot, step, subscriber, webhook
     external_id: Mapped[str] = mapped_column(String(255))
     payload: Mapped[dict] = mapped_column(JSONType)
@@ -63,7 +63,7 @@ class RawRecord(Base, TimestampMixin):
 # --- Каналы / источники / контент ----------------------------------------
 
 class Channel(Base, TimestampMixin):
-    """Площадка/канал: TikTok, YouTube, Instagram, VK, Telegram, BotHelp."""
+    """Площадка/канал: TikTok, YouTube, Instagram, VK или Telegram."""
 
     __tablename__ = "channels"
     __table_args__ = (UniqueConstraint("platform", "external_id"),)
@@ -179,7 +179,7 @@ class Tariff(Base, TimestampMixin):
 
 
 class FunnelStage(Base, TimestampMixin):
-    """Канонический этап воронки (наша модель — BotHelp аналитику не отдаёт)."""
+    """Канонический этап собственной Telegram-воронки."""
 
     __tablename__ = "funnel_stages"
 
@@ -191,7 +191,7 @@ class FunnelStage(Base, TimestampMixin):
 
 
 class FunnelStep(Base, TimestampMixin):
-    """Шаг бота BotHelp, замапленный на канонический этап и тариф."""
+    """Шаг Telegram-бота, замапленный на канонический этап и тариф."""
 
     __tablename__ = "funnel_steps"
     __table_args__ = (UniqueConstraint("bot_referral", "external_id"),)
@@ -264,7 +264,7 @@ class Event(Base):
 
 
 class Payment(Base, TimestampMixin):
-    """Оплата (Prodamus внутри BotHelp; провайдер фиксируем явно)."""
+    """Оплата собственного бота через Prodamus; провайдер фиксируем явно."""
 
     __tablename__ = "payments"
     __table_args__ = (UniqueConstraint("provider", "external_id"),)
@@ -275,7 +275,7 @@ class Payment(Base, TimestampMixin):
     amount: Mapped[float | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str | None] = mapped_column(String(8))
     status: Mapped[str] = mapped_column(String(32), default="succeeded")
-    provider: Mapped[str] = mapped_column(String(50))  # prodamus, bothelp
+    provider: Mapped[str] = mapped_column(String(50))  # prodamus
     external_id: Mapped[str] = mapped_column(String(255))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"))
