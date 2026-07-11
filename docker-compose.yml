@@ -2,7 +2,8 @@
 # Поднимает озеро данных (PostgreSQL), оркестратор (n8n), дашборд (Metabase)
 # и приложение (FastAPI: health + приём вебхуков + CLI выгрузки).
 #
-#   docker compose up -d          # поднять всё
+#   docker build --build-arg VCS_REF=local -t kontur-app:latest .
+#   docker compose up -d          # поднять локальный контур
 #   docker compose run --rm app python -m kontur.cli bothelp sync   # выгрузка BotHelp
 #
 # Боевой запуск — на VPS. Креды берутся из .env (в git не попадает).
@@ -28,8 +29,9 @@ services:
       retries: 10
 
   app:
+    # Production deploy stores an immutable GHCR digest in KONTUR_IMAGE.
+    # For local development, build kontur-app:latest explicitly first.
     image: ${KONTUR_IMAGE:-kontur-app:latest}
-    build: .
     restart: unless-stopped
     init: true
     depends_on:

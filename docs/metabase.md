@@ -8,6 +8,7 @@
 ## Путь 1. Автоматически (на VPS, когда поднят compose)
 
 ```bash
+docker build --build-arg VCS_REF=local -t kontur-app:latest .
 docker compose up -d
 # 1) один раз пройти мастер Metabase на http://<сервер>:3000 — создать админа
 # 2) вписать в .env: METABASE_USER / METABASE_PASSWORD (URL уже http://metabase:3000)

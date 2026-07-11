@@ -23,8 +23,16 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     exit 2
 fi
 
-version="${1:-$(git rev-parse --short=12 HEAD)}"
-image="kontur-app:${version}"
+if [ "$#" -gt 1 ]; then
+    echo "Usage: $0 [registry-image:tag-or-digest]" >&2
+    exit 2
+fi
+
+expected_revision="$(git rev-parse HEAD)"
+short_revision="$(git rev-parse --short=12 HEAD)"
+registry_image="${KONTUR_REGISTRY_IMAGE:-ghcr.io/surzhikxv/ib-services}"
+requested_image="${1:-${registry_image}:${expected_revision}}"
+allow_local_build="${KONTUR_ALLOW_LOCAL_BUILD:-0}"
 stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 rollback_image="kontur-app:rollback-${stamp}"
 
@@ -81,24 +89,46 @@ if systemctl is-active --quiet kontur-bot.service; then
     systemd_bot_active=true
 fi
 
+echo "Pulling prebuilt image $requested_image..."
+if docker pull "$requested_image"; then
+    actual_revision="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$requested_image")"
+    if [ "$actual_revision" != "$expected_revision" ]; then
+        echo "Image revision mismatch: expected $expected_revision, got $actual_revision" >&2
+        exit 1
+    fi
+    image="$(docker image inspect -f '{{index .RepoDigests 0}}' "$requested_image")"
+    if [ -z "$image" ] || [ "$image" = "<no value>" ]; then
+        echo "Pulled image has no immutable repository digest" >&2
+        exit 1
+    fi
+    echo "Verified image revision and digest: $image"
+elif [ "$allow_local_build" = "1" ]; then
+    image="kontur-app:${short_revision}"
+    echo "Registry pull failed; explicit emergency local build enabled..." >&2
+    docker tag "$old_app_id" "$rollback_image"
+    if ! docker build --pull=false --build-arg "VCS_REF=$expected_revision" -t "$image" .; then
+        echo "Clean build unavailable; using the verified-image overlay fallback..." >&2
+        docker build \
+            --pull=false \
+            --build-arg "BASE_IMAGE=$rollback_image" \
+            --build-arg "VCS_REF=$expected_revision" \
+            -f ops/Dockerfile.app-overlay \
+            -t "$image" \
+            .
+    fi
+else
+    echo "Registry pull failed. The server was not changed." >&2
+    echo "Wait for the publish workflow or use KONTUR_ALLOW_LOCAL_BUILD=1 only for an emergency." >&2
+    exit 1
+fi
+
 echo "Creating verified backup before deploy..."
 systemctl start kontur-backup.service
 
 docker tag "$old_app_id" "$rollback_image"
-echo "Building $image..."
-if ! docker build --pull=false -t "$image" .; then
-    echo "Clean build unavailable; using the verified-image overlay fallback..." >&2
-    docker build \
-        --pull=false \
-        --build-arg "BASE_IMAGE=$rollback_image" \
-        -f ops/Dockerfile.app-overlay \
-        -t "$image" \
-        .
-fi
-
+KONTUR_IMAGE="$image" COMPOSE_PROJECT_NAME=kontur docker compose config --quiet
 set_env_value KONTUR_IMAGE "$image"
 set_env_value COMPOSE_PROJECT_NAME kontur
-docker compose config --quiet
 
 rolled_back=false
 rollback() {
@@ -139,5 +169,5 @@ if [ "$systemd_bot_active" = true ]; then
 fi
 
 trap - ERR INT TERM
-echo "Deploy complete: $image"
+echo "Deploy complete: $image (revision $expected_revision)"
 echo "Rollback image retained locally: $rollback_image"

@@ -3,6 +3,11 @@
 ARG BASE_IMAGE=kontur-app:latest
 FROM ${BASE_IMAGE}
 
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/surzhikxv/ib-services" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 COPY pyproject.toml ./
 COPY requirements.lock ./
 COPY kontur ./kontur
