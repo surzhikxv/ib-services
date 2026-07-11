@@ -20,6 +20,23 @@ def test_resolve_refresh_token_bootstraps_from_env():
     assert load_token(f, "youtube").refresh_token == "rtok"   # сохранён
 
 
+def test_new_env_refresh_token_replaces_revoked_stored_token():
+    f = _factory()
+    save_token(
+        f,
+        "youtube",
+        refresh_token="revoked",
+        access_token="stale-access",
+        expires_at=NOW + timedelta(hours=1),
+    )
+
+    assert resolve_refresh_token(f, env_refresh="replacement") == "replacement"
+    row = load_token(f, "youtube")
+    assert row.refresh_token == "replacement"
+    assert row.access_token is None
+    assert row.expires_at is None
+
+
 def test_ensure_access_token_refreshes_when_missing():
     f = _factory()
     save_token(f, "youtube", refresh_token="rtok")            # access ещё нет

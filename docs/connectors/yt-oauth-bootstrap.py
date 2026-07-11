@@ -13,6 +13,7 @@
 
 Откроется согласие Google → жми «Advanced → Go to … (unsafe)» → разреши доступ.
 В конце скрипт напечатает строку YT_REFRESH_TOKEN=... — её в /opt/kontur/.env.
+Новый env-токен заменит ранее сохранённый токен в БД при следующем sync.
 """
 from __future__ import annotations
 

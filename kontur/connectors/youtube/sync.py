@@ -24,11 +24,14 @@ from kontur.models import Channel, ChannelMetric, Content, ContentMetric, SyncRu
 
 def resolve_refresh_token(session_factory, *, env_refresh: str) -> str:
     row = load_token(session_factory, "youtube")
+    if env_refresh:
+        # An explicitly replaced env secret is the recovery path when Google
+        # revokes the stored refresh token. Clear stale access/expiry with it.
+        if not row or row.refresh_token != env_refresh:
+            save_token(session_factory, "youtube", refresh_token=env_refresh)
+        return env_refresh
     if row and row.refresh_token:
         return row.refresh_token
-    if env_refresh:
-        save_token(session_factory, "youtube", refresh_token=env_refresh)
-        return env_refresh
     raise RuntimeError("нет refresh-токена YouTube: задай YT_REFRESH_TOKEN или сохрани OAuthToken")
 
 
