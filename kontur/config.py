@@ -86,7 +86,7 @@ def get_settings() -> Settings:
     return Settings(
         database_url=_database_url(),
         llm_api_key=os.getenv("LLM_API_KEY", ""),
-        llm_model=os.getenv("LLM_MODEL", "claude-opus-4-8"),
+        llm_model=os.getenv("LLM_MODEL", "claude-sonnet-5"),
         llm_effort=os.getenv("LLM_EFFORT", "medium"),
         llm_proxy_url=os.getenv("LLM_PROXY_URL", ""),
         vk_group_id=os.getenv("VK_GROUP_ID", ""),

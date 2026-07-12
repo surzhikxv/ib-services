@@ -1,8 +1,10 @@
 """TDD: дайджест данных для ИИ-аналитика (срез, по которому строится разбор)."""
+import json
+from decimal import Decimal
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from kontur.ai.digest import build_digest
+from kontur.ai.digest import _json_value, build_digest
 from kontur.db import init_db, make_session_factory
 from tests.funnel_seed import seed_funnel_analytics
 
@@ -38,3 +40,12 @@ def test_digest_buckets_time_series():
     assert sum(d["payments_by_week"].values()) == 3
     # ключ недели в формате ISO «YYYY-Www»
     assert all(len(w) >= 7 and "-W" in w for w in d["subscribers_by_week"])
+
+
+def test_digest_is_json_serializable_for_prompt_and_jsonb():
+    digest = build_digest(_seeded_factory())
+    encoded = json.dumps(digest, ensure_ascii=False)
+
+    assert '"revenue"' in encoded
+    assert isinstance(digest["kpis"]["revenue"], (int, float))
+    assert _json_value(Decimal("15348.00")) == 15348.0

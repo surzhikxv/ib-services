@@ -15,7 +15,7 @@
 - **prompts.py** — системный промпт (аналитик, простой язык, только по цифрам, без воды)
   и сборка промптов разбора/вопроса.
 - **llm.py** — узкий интерфейс `LLMClient`. По умолчанию `AnthropicLLM` (Claude
-  `claude-opus-4-8`, adaptive thinking). **Провайдер сменяем одной реализацией** — остальной
+  `claude-sonnet-5`, adaptive thinking). **Провайдер сменяем одной реализацией** — остальной
   код не меняется. `FakeLLM` — для тестов и dry-run.
 - **analyst.py** — `generate_report` (еженедельный разбор) и `answer_question` (ответ на
   вопрос); пишут результат в `ai_reports` вместе с дайджестом.
@@ -32,7 +32,7 @@ python -m kontur.cli ai report --period 2026-W24
 python -m kontur.cli ai ask "почему на этой неделе меньше продаж?"
 ```
 
-`.env`: `LLM_API_KEY` (от клиента), `LLM_MODEL` (умолч. `claude-opus-4-8`),
+`.env`: `LLM_API_KEY` (от клиента), `LLM_MODEL` (умолч. `claude-sonnet-5`),
 `LLM_EFFORT` (умолч. `medium` — баланс цены и глубины для регулярного отчёта).
 
 ## Что нужно от клиента

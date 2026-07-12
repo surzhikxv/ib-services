@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
@@ -13,8 +15,20 @@ from sqlalchemy.orm import sessionmaker
 from kontur.models import Payment, Subscriber
 
 
+def _json_value(value):
+    """Convert database-native values to JSON-safe values for prompts and JSONB."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
 def _rows(session, sql: str) -> list[dict]:
-    return [dict(r._mapping) for r in session.execute(text(sql))]
+    return [
+        {key: _json_value(value) for key, value in r._mapping.items()}
+        for r in session.execute(text(sql))
+    ]
 
 
 def _iso_week(dt) -> str | None:

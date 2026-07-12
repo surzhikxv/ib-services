@@ -1,6 +1,6 @@
 """Слой языковой модели за узким интерфейсом — провайдер легко поменять.
 
-По умолчанию — Claude через официальный SDK Anthropic (модель claude-opus-4-8,
+По умолчанию — Claude через официальный SDK Anthropic (модель claude-sonnet-5,
 adaptive thinking). Если у клиента ключ другого провайдера, заменяется одной
 реализацией LLMClient; всё остальное (дайджест, промпты, хранение) не меняется.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-sonnet-5"
 
 
 @runtime_checkable
