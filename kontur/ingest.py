@@ -56,17 +56,28 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
     sf = session_factory or _default_factory()
     session = sf()
     try:
+        now = datetime.now(timezone.utc)
+        event_time = occurred_at or now
         source_id = _resolve_source(session, source_code)
-        sub_values: dict = {"tg_user_id": str(tg_id), "last_seen_at": datetime.now(timezone.utc)}
+        sub_values: dict = {"tg_user_id": str(tg_id), "last_seen_at": now}
         if name:
             sub_values["name"] = name
         if username:
             sub_values["raw"] = {"username": username}
         if source_id is not None:
             sub_values["source_id"] = source_id
-        sub, _ = upsert(session, Subscriber,
-                        {"source_system": SOURCE_SYSTEM, "external_id": str(tg_id)}, sub_values)
+        sub, _ = upsert(
+            session,
+            Subscriber,
+            {"source_system": SOURCE_SYSTEM, "external_id": str(tg_id)},
+            sub_values,
+        )
         session.flush()
+        if sub.subscribed_at is None:
+            sub.subscribed_at = event_time
+        if sub.source_id is None:
+            sub.source_id = _resolve_source(session, "s-direct")
+        event_source_id = source_id or sub.source_id
         stage_id = None
         if stage_key:
             stage_id = session.scalar(select(FunnelStage.id).where(FunnelStage.key == stage_key))
@@ -78,8 +89,9 @@ def record_funnel_event(session_factory: sessionmaker | None = None, *, tg_id: i
         upsert(session, Event,
                {"source_system": SOURCE_SYSTEM, "dedup_key": dedup_key},
                {"subscriber_id": sub.id, "event_type": event_type,
-                "occurred_at": occurred_at or datetime.now(timezone.utc),
-                "funnel_stage_id": stage_id, "tariff_id": tariff_id, "source_id": source_id,
+                "occurred_at": event_time,
+                "funnel_stage_id": stage_id, "tariff_id": tariff_id,
+                "source_id": event_source_id,
                 "amount": amount, "currency": currency, "raw": raw})
         session.commit()
     except Exception:  # noqa: BLE001 — явный rollback, ошибку пробрасываем (вызывающий best-effort)
@@ -104,6 +116,18 @@ def record_step_enter(tg_id: int, step_index: int, *, uid: str | None = None,
     dedup_key = f"tg{tg_id}:step:{step_index}:{uid}" if uid else f"tg{tg_id}:step:{step_index}"
     record_funnel_event(session_factory, tg_id=tg_id, event_type="step_enter",
                         stage_key=stage_key, tariff_key=tariff_key, dedup_key=dedup_key)
+
+
+def record_checkout(tg_id: int, tariff: str, *, uid: str,
+                    session_factory: sessionmaker | None = None) -> None:
+    record_funnel_event(
+        session_factory,
+        tg_id=tg_id,
+        event_type="checkout",
+        stage_key="checkout",
+        tariff_key=tariff,
+        dedup_key=f"tg{tg_id}:checkout:{tariff}:{uid}",
+    )
 
 
 def record_applied(tg_id: int, step_index: int, button_title: str | None, *,

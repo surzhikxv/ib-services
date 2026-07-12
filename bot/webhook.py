@@ -19,12 +19,20 @@ from typing import Awaitable, Callable
 
 from aiohttp import web
 
-from .payments import WEBHOOK_PATH, resolve_payment_identity, sign, verify
+from .payments import (
+    WEBHOOK_PATH,
+    build_payment_url,
+    resolve_payment_identity,
+    sign,
+    verify,
+    verify_checkout,
+)
 
 logger = logging.getLogger("bot.webhook")
 
 # (tg_id, tariff, data) → None. Вызывается только на подтверждённой успешной оплате.
 OnPaid = Callable[[int, str, dict], Awaitable[None]]
+OnCheckout = Callable[[int, str, str], Awaitable[None]]
 
 _SUCCESS_STATUSES = {"success", "succeeded", "paid"}
 
@@ -54,7 +62,10 @@ def _listify(obj):
     return obj
 
 
-def make_webhook_app(on_paid: OnPaid) -> web.Application:
+def make_webhook_app(
+    on_paid: OnPaid,
+    on_checkout: OnCheckout | None = None,
+) -> web.Application:
     async def health(_request: web.Request) -> web.Response:
         return web.Response(text="ok")
 
@@ -101,7 +112,25 @@ def make_webhook_app(on_paid: OnPaid) -> web.Application:
         asyncio.create_task(run_on_paid(tg_id, tariff, data if isinstance(data, dict) else {}, order_id))
         return web.Response(text="success")
 
+    async def handle_checkout(request: web.Request) -> web.Response:
+        try:
+            tg_id = int(request.query.get("tg_id", ""))
+        except (TypeError, ValueError):
+            return web.Response(status=403, text="bad checkout signature")
+        tariff = request.query.get("tariff", "")
+        nonce = request.query.get("nonce", "")
+        signature = request.query.get("signature", "")
+        if not verify_checkout(tg_id, tariff, nonce, signature):
+            return web.Response(status=403, text="bad checkout signature")
+        if on_checkout is not None:
+            try:
+                await asyncio.wait_for(on_checkout(tg_id, tariff, nonce), timeout=3)
+            except Exception:  # noqa: BLE001 — redirect to payment must remain available
+                logger.exception("Checkout analytics failed tg=%s tariff=%s", tg_id, tariff)
+        raise web.HTTPFound(build_payment_url(tg_id, tariff))
+
     app = web.Application()
     app.router.add_post(WEBHOOK_PATH, handle)
+    app.router.add_get(WEBHOOK_PATH, handle_checkout)
     app.router.add_get("/health", health)
     return app

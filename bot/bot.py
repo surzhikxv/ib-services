@@ -147,7 +147,7 @@ def _resolved_url(route: Route | None, chat_id: int | None = None) -> str | None
     if route.kind == "pay":
         # Prodamus настроен → персональная ссылка с зашитым tg_id (один тап = оплата).
         if chat_id is not None and payments.configured():
-            return payments.build_payment_url(chat_id, route.tariff)
+            return payments.build_checkout_url(chat_id, route.tariff)
         return payment_url(route.tariff) or None  # запасной статический вариант
     return None
 
@@ -614,9 +614,9 @@ def _button_title(steps, si: int, bi: int, ki: int) -> str | None:
         return None
 
 
-async def _serve_webhook(on_paid, port: int) -> None:
+async def _serve_webhook(on_paid, on_checkout, port: int) -> None:
     """Поднять aiohttp-сервер приёма вебхука Prodamus рядом с поллингом бота."""
-    runner = web.AppRunner(make_webhook_app(on_paid))
+    runner = web.AppRunner(make_webhook_app(on_paid, on_checkout))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
     logger.info("Вебхук Prodamus слушает :%s%s", port, payments.WEBHOOK_PATH)
@@ -690,6 +690,10 @@ async def _run() -> None:
         except Exception:  # noqa: BLE001 — подтверждение оплаты и запись в озеро уже не откатываем
             logger.exception("Не удалось отправить страницу оплаты tg=%s тариф=%s", tg_id, tariff)
 
+    async def on_checkout(tg_id: int, tariff: str, nonce: str) -> None:
+        """A signed one-tap redirect records checkout before opening Prodamus."""
+        await _emit(ingest.record_checkout, tg_id, tariff, uid=nonce)
+
     if payments.configured():
         pay_mode = "Prodamus (ссылка с tg_id + вебхук)"
     elif SIMULATE_PAYMENT:
@@ -712,7 +716,7 @@ async def _run() -> None:
         logger.info("Напоминания неоплатившим отключены.")
     if payments.PRODAMUS_SECRET:
         port = int(os.getenv("PRODAMUS_WEBHOOK_PORT", "8081"))
-        tasks.append(_serve_webhook(on_paid, port))
+        tasks.append(_serve_webhook(on_paid, on_checkout, port))
         notify_url = payments.notification_url() or "(PUBLIC_BASE_URL не задан — ссылка без urlNotification)"
         logger.info("Приём оплат Prodamus: %s", notify_url)
 

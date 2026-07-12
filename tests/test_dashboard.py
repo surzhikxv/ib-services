@@ -67,8 +67,8 @@ def test_revenue_is_zero_without_prices_and_computes_with_prices():
 def test_revenue_by_source_buckets_unmarked_traffic():
     _, factory = _seeded_db()
     rows = _rows(factory, "SELECT * FROM v_revenue_by_source")
-    # все 3 оплаты — без UTM-разметки
-    assert any(r["source"] == "(не размечено)" and r["payments"] == 3 for r in rows)
+    # все 3 оплаты — без UTM-разметки, честно считаются прямым входом
+    assert any(r["source"] == "(прямой вход)" and r["payments"] == 3 for r in rows)
 
 
 def test_every_catalog_card_points_to_a_real_queryable_view():

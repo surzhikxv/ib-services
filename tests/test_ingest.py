@@ -24,6 +24,8 @@ def test_bot_start_creates_subscriber_and_event_idempotently():
     e = evs[0]
     assert e.event_type == "bot_start" and e.dedup_key == "tg101:bot_start"
     assert e.subscriber_id == subs[0].id and e.funnel_stage_id is not None  # 'welcome' resolved
+    assert subs[0].subscribed_at is not None
+    assert subs[0].source_id is not None and e.source_id == subs[0].source_id
 
 
 def test_payment_event_carries_tariff_amount_and_paid_stage():
@@ -36,6 +38,20 @@ def test_payment_event_carries_tariff_amount_and_paid_stage():
     assert float(e.amount) == 2990.0 and e.currency == "rub"
     assert e.tariff_id is not None and e.funnel_stage_id is not None  # 'premium' + 'paid' resolved
     assert e.raw == {"x": 1}
+
+
+def test_checkout_event_carries_stage_tariff_and_inherited_source():
+    sf = _factory()
+    ingest.record_bot_start(212, uid="start", source_code="s-youtube", session_factory=sf)
+    ingest.record_checkout(212, "standard", uid="click-1", session_factory=sf)
+
+    with sf() as session:
+        subscriber = session.scalars(select(Subscriber).where(Subscriber.external_id == "212")).one()
+        checkout = session.scalars(select(Event).where(Event.event_type == "checkout")).one()
+        assert checkout.dedup_key == "tg212:checkout:standard:click-1"
+        assert checkout.funnel_stage_id is not None
+        assert checkout.tariff_id is not None
+        assert checkout.source_id == subscriber.source_id
 
 
 def test_step_enter_dedup_key_and_idempotency():

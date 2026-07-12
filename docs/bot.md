@@ -59,12 +59,15 @@ python -m bot.preview
 
 - `bot_start`;
 - `step_enter`;
+- `checkout`;
 - `applied`;
 - `payment`;
 - `course_reminder`.
 
 Источник — `telegram_bot`. Deep-link payload из `/start` превращается в
-`Source(kind="start_link")`; поддерживаются UTM-алиасы `s/m/c/ct/t`.
+`Source(kind="start_link")`; поддерживаются UTM-алиасы `s/m/c/ct/t`. Вход без
+payload получает источник `direct`. Источник подписчика наследуют все дальнейшие
+события и оплаты.
 
 ## Напоминания
 
@@ -92,9 +95,14 @@ PAYMENT_RETURN_URL=https://t.me/<bot>
 PRODAMUS_SIGN_LINKS=1
 ```
 
-Кнопка оплаты получает персональный `order_id` с `tg_id` и тарифом. Prodamus отправляет
+Кнопка оплаты ведёт через подписанный `GET /prodamus?...`: бот фиксирует этап
+`checkout` и без дополнительного клика перенаправляет человека в Prodamus. Платёжная
+ссылка получает персональный `order_id` с `tg_id` и тарифом. Prodamus отправляет
 `POST /prodamus`; бот проверяет HMAC-подпись, сохраняет оплату до Telegram-delivery и
 быстро подтверждает webhook.
+
+Исторические `subscribed_at`, источники и checkout после обновления восстанавливаются
+идемпотентной командой `kontur db repair-funnel`.
 
 ## Доступ в канал
 

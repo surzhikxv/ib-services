@@ -58,6 +58,20 @@ def notification_url() -> str:
     return f"{PUBLIC_BASE_URL}{WEBHOOK_PATH}"
 
 
+def checkout_signature(tg_id: int, tariff: str, nonce: str, secret: str = "") -> str:
+    """Sign the analytics redirect so outsiders cannot forge checkout events."""
+    key = (secret or PRODAMUS_SECRET).encode()
+    payload = f"{tg_id}:{tariff}:{nonce}".encode()
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+
+def verify_checkout(tg_id: int, tariff: str, nonce: str, signature: str) -> bool:
+    if tariff not in TARIFFS or not PRODAMUS_SECRET:
+        return False
+    expected = checkout_signature(tg_id, tariff, nonce)
+    return hmac.compare_digest(expected, (signature or "").strip())
+
+
 # --- order_id: зашиваем tg_id и тариф ----------------------------------------
 
 def make_order_id(tg_id: int, tariff: str) -> str:
@@ -220,3 +234,18 @@ def build_payment_url(tg_id: int, tariff: str) -> str:
     if SIGN_LINKS and PRODAMUS_SECRET:
         pairs.append(("signature", sign(data)))
     return f"https://{PRODAMUS_DOMAIN}/?{urlencode(pairs)}"
+
+
+def build_checkout_url(tg_id: int, tariff: str) -> str:
+    """One-tap tracked redirect to Prodamus; falls back to the direct payment URL."""
+    if not PUBLIC_BASE_URL or not PRODAMUS_SECRET:
+        return build_payment_url(tg_id, tariff)
+    nonce = str(int(time.time()))
+    query = urlencode({
+        "checkout": "1",
+        "tg_id": str(tg_id),
+        "tariff": tariff,
+        "nonce": nonce,
+        "signature": checkout_signature(tg_id, tariff, nonce),
+    })
+    return f"{PUBLIC_BASE_URL}{WEBHOOK_PATH}?{query}"

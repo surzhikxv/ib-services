@@ -47,7 +47,7 @@ VIEWS: dict[str, str] = {
             t.key             AS tariff_key,
             t.title           AS tariff_title,
             pay.source_id,
-            COALESCE(src.utm_source, '(не размечено)') AS source,
+            COALESCE(NULLIF(src.utm_source, ''), NULLIF(src.code, ''), '(прямой вход)') AS source,
             COALESCE(pay.amount, t.price, 0)           AS revenue,
             pay.currency
         FROM payments pay
@@ -79,14 +79,14 @@ VIEWS: dict[str, str] = {
     """,
     "v_revenue_by_source": """
         SELECT
-            COALESCE(src.utm_source, '(не размечено)')         AS source,
+            COALESCE(NULLIF(src.utm_source, ''), NULLIF(src.code, ''), '(прямой вход)') AS source,
             COUNT(pay.id)                                      AS payments,
             COUNT(DISTINCT pay.subscriber_id)                  AS buyers,
             COALESCE(SUM(COALESCE(pay.amount, t.price, 0)), 0) AS revenue
         FROM payments pay
         LEFT JOIN tariffs t   ON t.id = pay.tariff_id
         LEFT JOIN sources src ON src.id = pay.source_id
-        GROUP BY COALESCE(src.utm_source, '(не размечено)')
+        GROUP BY COALESCE(NULLIF(src.utm_source, ''), NULLIF(src.code, ''), '(прямой вход)')
     """,
     "v_kpis": """
         SELECT

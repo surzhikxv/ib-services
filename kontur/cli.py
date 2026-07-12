@@ -35,6 +35,17 @@ def _cmd_db_views(args) -> int:
     return 0
 
 
+def _cmd_db_repair_funnel(args) -> int:
+    from kontur.funnel_repair import repair_funnel_history
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    init_db(engine)
+    stats = repair_funnel_history(make_session_factory(engine))
+    print("Funnel repair OK →", json.dumps(stats, ensure_ascii=False))
+    return 0
+
+
 def _cmd_db_schema(args) -> int:
     dialect = {"postgresql": postgresql.dialect(), "sqlite": sqlite.dialect()}[args.dialect]
     parts = []
@@ -432,6 +443,10 @@ def build_parser() -> argparse.ArgumentParser:
     schema = db.add_parser("schema", help="вывести DDL")
     schema.add_argument("--dialect", default="postgresql", choices=["postgresql", "sqlite"])
     schema.set_defaults(func=_cmd_db_schema)
+    db.add_parser(
+        "repair-funnel",
+        help="идемпотентно восстановить source/subscribed_at/checkout исторических событий",
+    ).set_defaults(func=_cmd_db_repair_funnel)
 
     vk = sub.add_parser("vk", help="коннектор ВКонтакте").add_subparsers(dest="action", required=True)
     vk.add_parser("sync", help="выгрузить посты и метрики VK в озеро").set_defaults(func=_cmd_vk_sync)

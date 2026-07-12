@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import parse_qs, urlparse
 
 from bot import payments
 from bot.webhook import _listify, _parse_nested, make_webhook_app
@@ -71,6 +72,20 @@ def test_build_payment_url_has_order_and_product():
     assert "order_id=tg777-premium-" in url
     assert "products%5B0%5D%5Bprice%5D=2990" in url  # products[0][price]=2990 (urlencoded)
     assert "do=pay" in url
+
+
+def test_build_checkout_url_is_signed_and_keeps_one_tap(monkeypatch):
+    monkeypatch.setattr(payments, "PUBLIC_BASE_URL", "https://bot.example")
+    monkeypatch.setattr(payments, "PRODAMUS_SECRET", SECRET)
+    monkeypatch.setattr(payments.time, "time", lambda: 1700000000)
+
+    url = payments.build_checkout_url(777, "premium")
+    query = parse_qs(urlparse(url).query)
+
+    assert url.startswith("https://bot.example/prodamus?")
+    assert query["tg_id"] == ["777"] and query["tariff"] == ["premium"]
+    assert payments.verify_checkout(777, "premium", "1700000000", query["signature"][0])
+    assert not payments.verify_checkout(778, "premium", "1700000000", query["signature"][0])
 
 
 def test_payment_data_includes_notification_url_when_public_base_set(monkeypatch):
@@ -237,3 +252,41 @@ def test_webhook_rejects_bad_signature_without_on_paid(monkeypatch):
     asyncio.run(run())
 
     assert calls == []
+
+
+def test_checkout_redirect_records_event_and_opens_prodamus(monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    monkeypatch.setattr(payments, "PRODAMUS_SECRET", SECRET)
+    calls = []
+
+    async def on_paid(_tg_id, _tariff, _data):
+        pass
+
+    async def on_checkout(tg_id, tariff, nonce):
+        calls.append((tg_id, tariff, nonce))
+
+    async def run():
+        nonce = "1700000000"
+        signature = payments.checkout_signature(42, "basic", nonce)
+        client = TestClient(TestServer(make_webhook_app(on_paid, on_checkout)))
+        await client.start_server()
+        try:
+            response = await client.get(
+                payments.WEBHOOK_PATH,
+                params={
+                    "checkout": "1",
+                    "tg_id": "42",
+                    "tariff": "basic",
+                    "nonce": nonce,
+                    "signature": signature,
+                },
+                allow_redirects=False,
+            )
+        finally:
+            await client.close()
+        assert response.status == 302
+        assert response.headers["Location"].startswith(f"https://{payments.PRODAMUS_DOMAIN}/?")
+
+    asyncio.run(run())
+    assert calls == [(42, "basic", "1700000000")]

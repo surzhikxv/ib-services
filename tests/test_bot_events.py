@@ -37,6 +37,20 @@ def test_button_title_lookup_and_guard():
     assert b._button_title([SimpleNamespace()], 0, 0, 0) is None  # AttributeError → None
 
 
+def test_payment_route_uses_one_tap_tracked_checkout_url(monkeypatch):
+    from bot import bot as b
+    from bot.routing import Route
+
+    monkeypatch.setattr(b.payments, "PRODAMUS_SECRET", "secret")
+    monkeypatch.setattr(b.payments, "PRODAMUS_DOMAIN", "shop.payform.ru")
+    monkeypatch.setattr(b.payments, "PUBLIC_BASE_URL", "https://slapychev.ru")
+
+    url = b._resolved_url(Route("pay", tariff="standard"), chat_id=777)
+
+    assert url.startswith("https://slapychev.ru/prodamus?checkout=1&")
+    assert "tg_id=777" in url and "tariff=standard" in url
+
+
 def test_record_payment_links_subscriber_tariff_and_source(monkeypatch, tmp_path):
     from sqlalchemy import select
 

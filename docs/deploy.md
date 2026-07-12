@@ -73,7 +73,7 @@ sudo KONTUR_ALLOW_LOCAL_BUILD=1 ./ops/deploy.sh
 docker compose ps
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8081/health
-curl -I https://slapychev.ru/prodamus  # GET должен вернуть 405
+curl -s -o /dev/null -w '%{http_code}\n' https://slapychev.ru/prodamus  # 403 без подписи
 systemctl is-active kontur-backup.timer nginx docker
 ```
 

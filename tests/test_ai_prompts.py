@@ -7,7 +7,7 @@ DIGEST = {
     "funnel": [{"stage_key": "welcome", "stage_title": "Приветствие", "subscribers": 34},
                {"stage_key": "paid", "stage_title": "Оплачено", "subscribers": 10}],
     "revenue_by_tariff": [{"tariff_key": "basic", "payments": 7, "revenue": 0}],
-    "revenue_by_source": [{"source": "(не размечено)", "payments": 14}],
+    "revenue_by_source": [{"source": "(прямой вход)", "payments": 14}],
     "subscribers_by_week": {"2026-W24": 34},
     "payments_by_week": {"2026-W24": 14},
 }
