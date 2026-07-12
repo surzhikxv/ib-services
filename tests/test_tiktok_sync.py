@@ -218,6 +218,29 @@ def test_manifest_requires_terminal_catalog_page():
     assert stats["catalog_pages"] == 1
 
 
+def test_dom_discovered_video_covers_non_catalog_without_pinned_type():
+    factory = _factory()
+    manifest = CaptureManifest(
+        batch_id="batch-dom-discovered",
+        script_version="3.2",
+        expected_videos=1,
+        catalog_videos=0,
+        insight_videos=1,
+        complete=True,
+    )
+    stats = TikTokConnector(
+        capture=[OVERVIEW_CALL, AUDIENCE_CALL],
+        discovered_ids={"777"},
+        snapshot_date=SNAP,
+        manifest=manifest,
+    ).run(factory)
+
+    content = factory().scalars(select(Content)).one()
+    assert stats["capture_complete"] is True
+    assert stats["discovered_videos"] == 1
+    assert content.type == "video"
+
+
 def test_overview_only_mode_with_explicit_channel():
     factory = _factory()
     stats = TikTokConnector(overview=OVERVIEW_CSV, overview_year=2026, snapshot_date=SNAP,

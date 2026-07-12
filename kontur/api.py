@@ -68,6 +68,7 @@ class TikTokIngest(BaseModel):
     channel_id: str | None = None
     channel_title: str | None = None
     pinned_ids: list[str] | None = None
+    discovered_ids: list[str] | None = None
     batch_id: str | None = None
     script_version: str | None = None
     expected_videos: int | None = None
@@ -115,6 +116,7 @@ def ingest_tiktok(payload: TikTokIngest, x_kontur_token: str | None = Header(def
             capture=payload.capture, overview=payload.overview, overview_year=payload.year,
             channel_external_id=payload.channel_id, channel_title=payload.channel_title,
             pinned_ids=set(payload.pinned_ids or []), manifest=manifest,
+            discovered_ids=set(payload.discovered_ids or []),
         ).run(_session_factory)
     except TikTokCaptureRejected as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Контур — TikTok Studio capture
 // @namespace    kontur.rosta
-// @version      3.1
-// @description  Пассивно сохраняет ответы TikTok Studio и последовательно открывает аналитику публикаций с фиксированным лимитом, ручными паузами и стопом при защитной проверке.
+// @version      3.2
+// @description  Пассивно сохраняет ответы TikTok Studio и автоматически последовательно открывает аналитику публикаций с фиксированным интервалом и стопом при защитной проверке.
 // @match        https://www.tiktok.com/tiktokstudio/*
 // @run-at       document-start
 // @grant        unsafeWindow
@@ -14,11 +14,11 @@
 // ==/UserScript==
 
 /*
- Версия 3.1 не подделывает запросы, подписи, заголовки или поведение пользователя.
+ Версия 3.2 не подделывает запросы, подписи, заголовки или поведение пользователя.
  Она только читает ответы, которые загрузил TikTok Studio, и открывает штатные
- страницы аналитики в одной вкладке. Между страницами — не менее 15 секунд;
- каждые 20 публикаций требуется ручное продолжение. При 401/403/429, CAPTCHA,
- challenge или выходе из аккаунта обход немедленно останавливается.
+ страницы аналитики в одной вкладке. Между страницами — не менее 15 секунд.
+ При 401/403/429, CAPTCHA, challenge или выходе из аккаунта обход немедленно
+ останавливается.
 
  Перед каждым сбором нажми «Новый сбор», затем вручную промотай «Публикации» до
  конца. «Проверить» покажет размер каталога. Сервер примет только один завершённый
@@ -29,9 +29,8 @@
   'use strict';
 
   const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const SCRIPT_VERSION = '3.1';
+  const SCRIPT_VERSION = '3.2';
   const PAGE_DELAY_MS = 15000;
-  const PAUSE_EVERY_STEPS = 60; // 3 страницы × 20 публикаций
   const OWNER_TTL_MS = 60000;
   const TABS = ['', 'viewers', 'engagement'];
   const TAB_ID_KEY = 'kontur_tiktok_tab_id';
@@ -41,7 +40,7 @@
   const K = {
     schema: 'k3_schema', cap: 'k3_cap', queue: 'k3_queue', mode: 'k3_mode',
     ep: 'k_ep', tok: 'k_tok', hb: 'k_hb', pins: 'k3_pins', batch: 'k3_batch',
-    expected: 'k3_expected', visited: 'k3_visited', nextPause: 'k3_next_pause',
+    expected: 'k3_expected', visited: 'k3_visited', dom: 'k3_dom_ids',
     owner: 'k3_owner', safety: 'k3_safety', overview: 'k3_overview',
     overviewName: 'k3_overview_name', year: 'k3_overview_year', notice: 'k3_notice',
   };
@@ -61,7 +60,7 @@
 
   function initState() {
     if (GM_getValue(K.schema, '') === SCRIPT_VERSION) return;
-    [K.cap, K.queue, K.mode, K.batch, K.expected, K.visited, K.nextPause,
+    [K.cap, K.queue, K.mode, K.batch, K.expected, K.visited, K.dom,
       K.owner, K.safety, K.overview, K.overviewName, K.year].forEach(GM_deleteValue);
     GM_setValue(K.schema, SCRIPT_VERSION);
   }
@@ -75,7 +74,7 @@
       setJSON(K.queue, []);
       setJSON(K.expected, []);
       setJSON(K.visited, {});
-      GM_setValue(K.nextPause, PAUSE_EVERY_STEPS);
+      setJSON(K.dom, []);
       GM_setValue(K.mode, 'idle');
     }
     return id;
@@ -194,9 +193,26 @@
     return parsed;
   }
 
+  function scanDomIds() {
+    const ids = new Set(getJSON(K.dom, []));
+    document.querySelectorAll('a[href*="/video/"],a[href*="/photo/"],a[href*="/analytics/"]').forEach((link) => {
+      const match = /\/(?:video|photo|analytics)\/(\d{6,})/.exec(link.getAttribute('href') || '');
+      if (match) ids.add(match[1]);
+    });
+    setJSON(K.dom, [...ids]);
+    return ids;
+  }
+
+  function discoveredIds() {
+    const catalog = catalogIds();
+    const manualPins = new Set(getJSON(K.pins, []).map(String));
+    return new Set([...getJSON(K.dom, [])].map(String).filter((id) => !catalog.has(id) && !manualPins.has(id)));
+  }
+
   function allIds() {
     const ids = catalogIds();
     getJSON(K.pins, []).forEach((id) => ids.add(String(id)));
+    getJSON(K.dom, []).forEach((id) => ids.add(String(id)));
     return ids;
   }
 
@@ -282,10 +298,6 @@
     setJSON(K.visited, visited);
   }
 
-  function visitedSteps() {
-    return Object.values(getJSON(K.visited, {})).reduce((sum, tabs) => sum + new Set(tabs || []).size, 0);
-  }
-
   function buildMissingQueue(ids) {
     const visited = getJSON(K.visited, {});
     const queue = [];
@@ -320,23 +332,13 @@
       return;
     }
     markCurrentVisited();
-    const queue = getJSON(K.queue, []);
-    const done = visitedSteps();
-    const pauseAt = Number(GM_getValue(K.nextPause, PAUSE_EVERY_STEPS));
-    if (queue.length && done >= pauseAt) {
-      GM_setValue(K.nextPause, pauseAt + PAUSE_EVERY_STEPS);
-      GM_setValue(K.mode, 'paused');
-      releaseOwner();
-      status('Плановая пауза после 20 публикаций. Проверь TikTok и нажми «Продолжить».');
-      paint();
-      return;
-    }
     advance();
   }
 
   function startWalk() {
     if (!checkPageSafety()) return;
     ensureBatch();
+    scanDomIds();
     const parsed = savePins();
     if (parsed.shortlink) {
       status('Короткие ссылки не поддержаны: открой их и вставь полный URL /video/<id>.');
@@ -418,6 +420,7 @@
     const body = {
       capture,
       pinned_ids: getJSON(K.pins, []),
+      discovered_ids: [...discoveredIds()],
       batch_id: GM_getValue(K.batch, ''),
       script_version: SCRIPT_VERSION,
       expected_videos: expected.size,
@@ -443,8 +446,13 @@
     if (body.insight_videos !== body.expected_videos) {
       return 'полная аналитика есть только для ' + body.insight_videos + ' из ' + body.expected_videos;
     }
-    if (body.catalog_videos + getJSON(K.pins, []).filter((id) => !catalogIds().has(String(id))).length !== body.expected_videos) {
-      return 'каталог и список закрепов не покрывают все публикации';
+    const catalogIdsNow = catalogIds();
+    const outsideCatalog = new Set([
+      ...getJSON(K.pins, []).map(String),
+      ...(body.discovered_ids || []).map(String),
+    ].filter((id) => !catalogIdsNow.has(id)));
+    if (body.catalog_videos + outsideCatalog.size !== body.expected_videos) {
+      return 'каталог и найденные на странице публикации не покрывают весь список';
     }
     if (buildMissingQueue([...allIds()]).length) return 'не все три страницы каждой публикации пройдены';
     return '';
@@ -482,7 +490,7 @@
             if (parsed && parsed.stats && parsed.stats.videos) count = parsed.stats.videos;
           } catch (e) {}
           GM_setValue(K.hb, new Date().toISOString());
-          [K.cap, K.queue, K.expected, K.visited, K.batch, K.nextPause, K.overview,
+          [K.cap, K.queue, K.expected, K.visited, K.dom, K.batch, K.overview,
             K.overviewName, K.year].forEach(GM_deleteValue);
           GM_setValue(K.mode, 'idle');
           status('Залито ✓ · видео: ' + count);
@@ -509,7 +517,7 @@
 
   function newBatch() {
     releaseOwner();
-    [K.cap, K.queue, K.expected, K.visited, K.batch, K.nextPause, K.safety,
+    [K.cap, K.queue, K.expected, K.visited, K.dom, K.batch, K.safety,
       K.overview, K.overviewName, K.year].forEach(GM_deleteValue);
     GM_setValue(K.mode, 'idle');
     ensureBatch();
@@ -546,6 +554,7 @@
     if (!el) return;
     const catalog = catalogState();
     const insights = insightIds();
+    const discovered = discoveredIds();
     const total = allIds();
     const queue = getJSON(K.queue, []);
     const mode = GM_getValue(K.mode, 'idle');
@@ -553,7 +562,7 @@
     const overview = GM_getValue(K.overviewName, 'нет');
     el.querySelector('#k-n').textContent =
       'каталог ' + catalog.ids.size + ' · страниц ' + catalog.pages + ' · конец ' + (catalog.complete ? 'да' : 'нет') +
-      ' · всего ' + total.size + ' · аналитика ' + insights.size +
+      ' · вне каталога ' + discovered.size + ' · всего ' + total.size + ' · аналитика ' + insights.size +
       ' · очередь ' + queue.length + ' · режим ' + mode + ' · Overview ' + overview +
       ' · залито ' + heartbeat;
   }
@@ -562,7 +571,7 @@
     el = document.createElement('div');
     el.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483647;background:#111;color:#fff;font:12px/1.4 -apple-system,sans-serif;padding:10px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);width:340px;opacity:.96';
     el.innerHTML =
-      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok v3.1</div>' +
+      '<div style="font-weight:600;margin-bottom:6px">Контур · TikTok v3.2</div>' +
       '<div id="k-n" style="color:#7fd;margin-bottom:6px;word-break:break-word">—</div>' +
       '<input id="k-ep" placeholder="Endpoint /ingest/tiktok" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
       '<input id="k-tok" type="password" placeholder="Token" style="box-sizing:border-box;width:100%;margin-bottom:4px;padding:5px;border-radius:5px;border:0">' +
@@ -590,6 +599,7 @@
     el.querySelector('#k-overview').onchange = (event) => readOverview(event.target.files && event.target.files[0]);
     el.querySelector('#k-new').onclick = newBatch;
     el.querySelector('#k-dry').onclick = () => {
+      scanDomIds();
       const parsed = savePins();
       const catalog = catalogState();
       const count = allIds().size;
@@ -608,6 +618,13 @@
 
   function boot() {
     mountUI();
+    scanDomIds();
+    setInterval(() => {
+      if (GM_getValue(K.mode, 'idle') !== 'walking') {
+        scanDomIds();
+        paint();
+      }
+    }, 2000);
     const notice = GM_getValue(K.notice, '');
     if (notice) {
       GM_deleteValue(K.notice);

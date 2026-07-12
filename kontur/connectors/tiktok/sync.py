@@ -108,6 +108,7 @@ def validate_capture_manifest(
     manifest: CaptureManifest,
     by_aweme: dict[str, dict],
     pinned_ids: set[str],
+    discovered_ids: set[str],
     *,
     baseline_videos: int,
     catalog_complete: bool,
@@ -138,9 +139,15 @@ def validate_capture_manifest(
             f"богатая аналитика собрана не для всех публикаций: "
             f"{manifest.insight_videos} из {manifest.expected_videos}"
         )
-    covered = counts["catalog_videos"] + len(pinned_ids - {
+    unknown_ids = (pinned_ids | discovered_ids) - set(by_aweme)
+    if unknown_ids:
+        raise TikTokCaptureRejected(
+            "не для всех найденных вне каталога публикаций собрана аналитика"
+        )
+    catalog_ids = {
         aid for aid, merged in by_aweme.items() if merged.get("_catalog")
-    })
+    }
+    covered = counts["catalog_videos"] + len((pinned_ids | discovered_ids) - catalog_ids)
     if covered != manifest.expected_videos:
         raise TikTokCaptureRejected(
             "не все публикации подтверждены каталогом или явным списком закрепов"
@@ -186,6 +193,7 @@ class TikTokConnector(Connector):
         channel_external_id: str | None = None,
         channel_title: str | None = None,
         pinned_ids: set[str] | None = None,
+        discovered_ids: set[str] | None = None,
         snapshot_date=None,
         manifest: CaptureManifest | None = None,
     ):
@@ -194,6 +202,7 @@ class TikTokConnector(Connector):
         self._overview_year = overview_year
         self._channel_external_id = channel_external_id
         self._pinned_ids = pinned_ids or set()
+        self._discovered_ids = discovered_ids or set()
         self._channel_title = channel_title
         self._snapshot_date = snapshot_date
         self._manifest = manifest
@@ -242,6 +251,7 @@ class TikTokConnector(Connector):
                     self._manifest,
                     by_aweme,
                     self._pinned_ids,
+                    self._discovered_ids,
                     baseline_videos=baseline_videos,
                     catalog_complete=bool(catalog_state["catalog_complete"]),
                 )
@@ -261,6 +271,7 @@ class TikTokConnector(Connector):
                 )
             stats.update(counts)
             stats.update(catalog_state)
+            stats["discovered_videos"] = len(self._discovered_ids)
             stats["baseline_videos"] = baseline_videos
             # Только browser batch v3 несёт проверяемое ожидание полного каталога.
             # Legacy/CLI capture остаётся полезным импортом, но не делает health зелёным.
