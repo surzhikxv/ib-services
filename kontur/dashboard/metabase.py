@@ -63,8 +63,17 @@ def grid_layout(cards: list[Card]) -> dict[str, dict]:
 
     if scalars:
         width = GRID_COLS // len(scalars)
+        remainder = GRID_COLS % len(scalars)
+        # Дополнительные колонки отдаём KPI с самыми длинными заголовками:
+        # сетка занимает всю ширину, а названия реже обрезаются многоточием.
+        wider = set(
+            sorted(range(len(scalars)), key=lambda i: len(scalars[i].name), reverse=True)[:remainder]
+        )
+        col = 0
         for i, c in enumerate(scalars):
-            layout[c.key] = {"row": 0, "col": i * width, "size_x": width, "size_y": 4}
+            card_width = width + (1 if i in wider else 0)
+            layout[c.key] = {"row": 0, "col": col, "size_x": card_width, "size_y": 4}
+            col += card_width
 
     chart_w, chart_h = GRID_COLS // 2, 8
     for i, c in enumerate(charts):

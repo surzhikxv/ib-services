@@ -81,6 +81,8 @@ def test_grid_layout_places_scalars_on_top_row():
     cols = [layout[c.key]["col"] for c in scalars]
     assert cols == sorted(cols)
     assert len(set(cols)) == len(cols)
+    assert sum(layout[c.key]["size_x"] for c in scalars) == 24
+    assert layout["kpi_conversion"]["size_x"] > layout["kpi_payments"]["size_x"]
 
 
 def test_grid_layout_places_charts_below_scalars():
