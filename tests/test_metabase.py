@@ -5,9 +5,10 @@ HTTP-хореография Metabase API исполняется только п�
 """
 import httpx
 
-from kontur.dashboard.catalog import CARDS, Card
+from kontur.dashboard.catalog import CARDS, Card, DateFilter
 from kontur.dashboard.metabase import (
     MetabaseClient,
+    PERIOD_PARAMETER,
     _pg_details,
     archive_dashboard_by_name,
     card_payload,
@@ -16,6 +17,7 @@ from kontur.dashboard.metabase import (
     ensure_database,
     grid_layout,
     resolve_dashboard_tabs,
+    resolve_date_field_ids,
     set_custom_homepage,
     unified_dashboard_config,
 )
@@ -70,6 +72,59 @@ def test_card_payload_preserves_visualization_settings():
     )
 
     assert card_payload(card, database_id=7)["visualization_settings"] == settings
+
+
+def test_card_payload_adds_date_field_filter_template_tag():
+    card = Card(
+        "posts", "Публикации", "v_social_content", "scalar",
+        'SELECT COUNT(*) FROM v_social_content [[WHERE {{period}}]]',
+        date_filter=DateFilter("v_social_content", "published_at"),
+    )
+
+    payload = card_payload(
+        card,
+        database_id=7,
+        date_field_ids={("v_social_content", "published_at"): 997},
+    )
+    tag = payload["dataset_query"]["native"]["template-tags"]["period"]
+
+    assert tag["type"] == "dimension"
+    assert tag["dimension"] == ["field", 997, None]
+    assert tag["widget-type"] == "date/all-options"
+    assert "alias" not in tag
+
+
+def test_card_payload_preserves_date_field_alias():
+    card = Card(
+        "posts", "Публикации", "v_social_content", "scalar",
+        'SELECT COUNT(*) FROM v_social_content sc WHERE TRUE [[AND {{period}}]]',
+        date_filter=DateFilter("v_social_content", "published_at", "sc.published_at"),
+    )
+
+    payload = card_payload(
+        card,
+        database_id=7,
+        date_field_ids={("v_social_content", "published_at"): 997},
+    )
+
+    assert payload["dataset_query"]["native"]["template-tags"]["period"]["alias"] == (
+        "sc.published_at"
+    )
+
+
+def test_card_payload_rejects_missing_date_field_id():
+    card = Card(
+        "posts", "Публикации", "v_social_content", "scalar",
+        'SELECT COUNT(*) FROM v_social_content [[WHERE {{period}}]]',
+        date_filter=DateFilter("v_social_content", "published_at"),
+    )
+
+    try:
+        card_payload(card, database_id=7)
+    except ValueError as exc:
+        assert "v_social_content.published_at" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("карточка с периодом не должна создаваться без field id")
 
 
 def test_grid_layout_places_scalars_on_top_row():
@@ -172,6 +227,27 @@ def test_ensure_collection_creates_project_collection():
     assert ensure_collection(FakeMetabase()) == 8
 
 
+def test_resolve_date_field_ids_uses_live_database_metadata():
+    card = Card(
+        "posts", "Публикации", "v_social_content", "scalar", "SELECT 1",
+        date_filter=DateFilter("v_social_content", "published_at"),
+    )
+
+    class FakeMetabase:
+        def get(self, path):
+            assert path == "/api/database/7/metadata"
+            return {
+                "tables": [{
+                    "name": "v_social_content",
+                    "fields": [{"id": 997, "name": "published_at"}],
+                }],
+            }
+
+    assert resolve_date_field_ids(FakeMetabase(), 7, [card]) == {
+        ("v_social_content", "published_at"): 997,
+    }
+
+
 def test_resolve_dashboard_tabs_reuses_ids_and_assigns_negative_ids_to_new_tabs():
     payload, by_key = resolve_dashboard_tabs(
         [{"id": 41, "name": "Обзор"}],
@@ -233,6 +309,44 @@ def test_ensure_dashboard_places_cards_on_tabs_and_uses_short_titles():
     }
 
 
+def test_ensure_dashboard_adds_global_period_and_card_mapping():
+    card = Card(
+        "posts", "Соцсети · Публикации", "v_social_content", "scalar", "SELECT 1",
+        date_filter=DateFilter("v_social_content", "published_at"),
+    )
+
+    class FakeMetabase:
+        def __init__(self):
+            self.payload = None
+
+        def get(self, path):
+            assert path == "/api/dashboard"
+            return []
+
+        def post(self, path, json):
+            assert path == "/api/dashboard"
+            return {"id": 8}
+
+        def put(self, path, json):
+            assert path == "/api/dashboard/8"
+            self.payload = json
+
+    mb = FakeMetabase()
+    ensure_dashboard(
+        mb,
+        {"posts": 51},
+        cards=[card],
+        layout={"posts": {"row": 0, "col": 0, "size_x": 4, "size_y": 4}},
+    )
+
+    assert mb.payload["parameters"] == [PERIOD_PARAMETER]
+    assert mb.payload["dashcards"][0]["parameter_mappings"] == [{
+        "parameter_id": "period",
+        "card_id": 51,
+        "target": ["dimension", ["template-tag", "period"]],
+    }]
+
+
 def test_unified_dashboard_has_one_tab_for_every_business_and_social_card():
     cards, tabs, card_tabs, layout = unified_dashboard_config()
     card_keys = {card.key for card in cards}
@@ -245,6 +359,29 @@ def test_unified_dashboard_has_one_tab_for_every_business_and_social_card():
     assert set(card_tabs) == card_keys
     assert set(layout) == card_keys
     assert {card_tabs[card.key] for card in CARDS} == {"business"}
+
+
+def test_period_filter_coverage_matches_current_state_cards():
+    cards, _, card_tabs, _ = unified_dashboard_config()
+    current_state_keys = {
+        "funnel",
+        "connector_freshness",
+        "social_followers",
+        "social_followers_by_platform",
+        "social_data_quality",
+        "social_freshness",
+    }
+
+    assert {card.key for card in cards if card.date_filter is None} == current_state_keys
+    for card in cards:
+        assert ("{{period}}" in card.metabase_sql) is (card.date_filter is not None)
+
+    filterable_tabs = {
+        card_tabs[card.key] for card in cards if card.date_filter is not None
+    }
+    assert filterable_tabs == {
+        "business", "overview", "content", "platforms", "tiktok", "ai_reports"
+    }
 
 
 def test_ensure_dashboard_reuses_legacy_name_instead_of_creating_duplicate():

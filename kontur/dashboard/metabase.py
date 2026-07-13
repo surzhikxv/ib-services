@@ -32,12 +32,44 @@ from kontur.dashboard.social_catalog import (
 
 GRID_COLS = 24
 BUSINESS_TAB = {"key": "business", "name": "Бизнес"}
+PERIOD_PARAMETER_ID = "period"
+PERIOD_PARAMETER = {
+    "id": PERIOD_PARAMETER_ID,
+    "name": "Период",
+    "slug": "period",
+    "type": "date/all-options",
+    "sectionId": "date",
+    "default": "past30days~",
+}
 
 
 # --- чистые помощники (тестируемы) ---------------------------------------
 
-def card_payload(card: Card, database_id: int, collection_id: int | None = None) -> dict:
+def card_payload(
+    card: Card,
+    database_id: int,
+    collection_id: int | None = None,
+    date_field_ids: dict[tuple[str, str], int] | None = None,
+) -> dict:
     """Payload нативного вопроса Metabase из карточки каталога."""
+    native = {"query": card.metabase_sql}
+    if card.date_filter is not None:
+        key = (card.date_filter.view, card.date_filter.field)
+        field_id = (date_field_ids or {}).get(key)
+        if field_id is None:
+            raise ValueError(f"Не найдено поле Metabase для фильтра: {key[0]}.{key[1]}")
+        template_tag = {
+            "id": f"{card.key}-period",
+            "name": PERIOD_PARAMETER_ID,
+            "display-name": "Период",
+            "type": "dimension",
+            "dimension": ["field", field_id, None],
+            "widget-type": "date/all-options",
+            "required": False,
+        }
+        if card.date_filter.alias:
+            template_tag["alias"] = card.date_filter.alias
+        native["template-tags"] = {PERIOD_PARAMETER_ID: template_tag}
     return {
         "name": card.name,
         "display": card.display,
@@ -45,7 +77,7 @@ def card_payload(card: Card, database_id: int, collection_id: int | None = None)
         "collection_id": collection_id,
         "dataset_query": {
             "type": "native",
-            "native": {"query": card.metabase_sql},
+            "native": native,
             "database": database_id,
         },
         "visualization_settings": card.visualization_settings or {},
@@ -208,12 +240,13 @@ def ensure_cards(
     database_id: int,
     collection_id: int | None = None,
     cards: list[Card] = CARDS,
+    date_field_ids: dict[tuple[str, str], int] | None = None,
 ) -> dict[str, int]:
     """Создаёт/обновляет вопросы из каталога. Возвращает card.key -> id вопроса."""
     by_name = _index_by_name(mb.get("/api/card"))
     result: dict[str, int] = {}
     for card in cards:
-        payload = card_payload(card, database_id, collection_id)
+        payload = card_payload(card, database_id, collection_id, date_field_ids)
         if card.name in by_name:
             cid = by_name[card.name]
             mb.put(f"/api/card/{cid}", payload)
@@ -221,6 +254,36 @@ def ensure_cards(
             cid = mb.post("/api/card", payload)["id"]
         result[card.key] = cid
     return result
+
+
+def resolve_date_field_ids(
+    mb: MetabaseClient,
+    database_id: int,
+    cards: list[Card],
+) -> dict[tuple[str, str], int]:
+    """Находит актуальные Metabase field ID для всех фильтруемых карточек."""
+    required = {
+        (card.date_filter.view, card.date_filter.field)
+        for card in cards
+        if card.date_filter is not None
+    }
+    if not required:
+        return {}
+
+    metadata = mb.get(f"/api/database/{database_id}/metadata")
+    found: dict[tuple[str, str], int] = {}
+    for table in metadata.get("tables", []):
+        table_name = table.get("name")
+        for field in table.get("fields", []):
+            key = (table_name, field.get("name"))
+            if key in required:
+                found[key] = field["id"]
+
+    missing = required - set(found)
+    if missing:
+        names = ", ".join(f"{view}.{field}" for view, field in sorted(missing))
+        raise RuntimeError(f"Metabase не видит поля фильтра периода: {names}")
+    return found
 
 
 def ensure_dashboard(
@@ -269,6 +332,12 @@ def ensure_dashboard(
             dashcard["dashboard_tab_id"] = tab_ids[tab_key]
         if card_titles and card.key in card_titles:
             dashcard["visualization_settings"] = {"card.title": card_titles[card.key]}
+        if card.date_filter is not None:
+            dashcard["parameter_mappings"] = [{
+                "parameter_id": PERIOD_PARAMETER_ID,
+                "card_id": card_ids[card.key],
+                "target": ["dimension", ["template-tag", PERIOD_PARAMETER_ID]],
+            }]
         dashcards.append(dashcard)
 
     payload = {
@@ -277,6 +346,8 @@ def ensure_dashboard(
         "collection_id": collection_id,
         "dashcards": dashcards,
     }
+    if any(card.date_filter is not None for card in cards):
+        payload["parameters"] = [PERIOD_PARAMETER.copy()]
     if tabs_payload is not None:
         payload["tabs"] = tabs_payload
     mb.put(f"/api/dashboard/{dash_id}", payload)
@@ -311,9 +382,14 @@ def provision(base_url: str, username: str, password: str) -> dict:
         mb.login(username, password)
         db_id = ensure_database(mb)
         collection_id = ensure_collection(mb)
-        business_card_ids = ensure_cards(mb, db_id, collection_id, CARDS)
-        social_card_ids = ensure_cards(mb, db_id, collection_id, SOCIAL_CARDS)
         cards, tabs, card_tabs, layout = unified_dashboard_config()
+        date_field_ids = resolve_date_field_ids(mb, db_id, cards)
+        business_card_ids = ensure_cards(
+            mb, db_id, collection_id, CARDS, date_field_ids
+        )
+        social_card_ids = ensure_cards(
+            mb, db_id, collection_id, SOCIAL_CARDS, date_field_ids
+        )
         dashboard_id = ensure_dashboard(
             mb,
             {**business_card_ids, **social_card_ids},

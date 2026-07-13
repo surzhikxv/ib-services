@@ -6,12 +6,17 @@
 """
 from __future__ import annotations
 
-from kontur.dashboard.catalog import Card
+from kontur.dashboard.catalog import Card, DateFilter
 
 SOCIAL_DASHBOARD_NAME = "Соцсети — аналитика"
 SOCIAL_DASHBOARD_DESCRIPTION = (
     "Контент, просмотры, вовлечение, динамика площадок и отчёты ИИ-наставника"
 )
+
+CONTENT_PERIOD = DateFilter("v_social_content", "published_at")
+CONTENT_PERIOD_SC = DateFilter("v_social_content", "published_at", "sc.published_at")
+DAILY_PERIOD = DateFilter("v_social_daily", "snapshot_date")
+AI_REPORT_PERIOD = DateFilter("v_ai_reports", "created_at")
 
 # Шесть коротких тематических экранов вместо одной длинной ленты карточек.
 # ``key`` используется только при провижининге, ``name`` видит пользователь.
@@ -106,6 +111,7 @@ def _tiktok_breakdown(path: str, label_sql: str, *, limit: int | None = None) ->
             WHERE sc.platform = 'tiktok'
               AND latest.raw->'{path}' IS NOT NULL
               AND sc.views > 0
+              [[AND {{{{period}}}}]]
         ), expanded AS (
             SELECT kv.key, CAST(kv.value AS NUMERIC) AS share, eligible.views
             FROM eligible
@@ -143,6 +149,7 @@ def _tiktok_audience_breakdown(
             WHERE sc.platform = 'tiktok'
               AND latest.raw->'audience'->'{audience_key}' IS NOT NULL
               AND sc.views > 0
+              [[AND {{{{period}}}}]]
         ), expanded AS (
             SELECT kv.key, CAST(kv.value AS NUMERIC) AS share, eligible.views
             FROM eligible
@@ -173,6 +180,7 @@ def _ai_report_text(*, limit: int) -> str:
             E'\\n\\n', summary
         ) AS "Отчёт"
         FROM v_ai_reports
+        [[WHERE {{{{period}}}}]]
         ORDER BY created_at DESC, report_id DESC
         LIMIT {limit}
     """
@@ -181,53 +189,75 @@ def _ai_report_text(*, limit: int) -> str:
 SOCIAL_CARDS: list[Card] = [
     # KPI
     Card("social_posts", "Соцсети · Публикации", "v_social_content", "scalar",
-         'SELECT COUNT(*) AS "Публикации" FROM v_social_content',
-         "Все загруженные публикации четырёх площадок"),
+         'SELECT COUNT(*) AS "Публикации" FROM v_social_content [[WHERE {{period}}]]',
+         "Публикации четырёх площадок за выбранный период",
+         date_filter=CONTENT_PERIOD),
     Card("social_views", "Соцсети · Просмотры", "v_social_content", "scalar",
-         'SELECT SUM(views) AS "Просмотры" FROM v_social_content',
-         "Текущие lifetime-просмотры публикаций"),
+         'SELECT SUM(views) AS "Просмотры" FROM v_social_content [[WHERE {{period}}]]',
+         "Lifetime-просмотры публикаций, вышедших в выбранный период",
+         date_filter=CONTENT_PERIOD),
     Card("social_engagements", "Соцсети · Реакции", "v_social_content", "scalar",
-         'SELECT SUM(engagements) AS "Реакции" FROM v_social_content',
-         "Лайки и реакции + комментарии + репосты + сохранения"),
+         'SELECT SUM(engagements) AS "Реакции" FROM v_social_content [[WHERE {{period}}]]',
+         "Реакции на публикации выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_er", "Соцсети · Вовлечённость, %", "v_social_content", "scalar",
          'SELECT ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) '
-         'AS "Вовлечённость, %" FROM v_social_content',
-         "Суммарные реакции / суммарные просмотры"),
+         'AS "Вовлечённость, %" FROM v_social_content [[WHERE {{period}}]]',
+         "Суммарные реакции / просмотры публикаций выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_avg_views", "Соцсети · Средние просмотры", "v_social_content", "scalar",
-         'SELECT ROUND(AVG(views), 0) AS "Средние просмотры" FROM v_social_content',
-         "Среднее число просмотров одной публикации"),
+         'SELECT ROUND(AVG(views), 0) AS "Средние просмотры" '
+         'FROM v_social_content [[WHERE {{period}}]]',
+         "Средние просмотры публикации выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_followers", "Соцсети · Известные подписчики", "v_social_channels", "scalar",
          'SELECT SUM(followers) AS "Подписчики" FROM v_social_channels',
          "Сумма доступных счётчиков Telegram, VK и YouTube; TikTok их не отдаёт"),
 
     # Общая картина
     Card("social_platform_overview", "Соцсети · Сводка по площадкам", "v_social_channels", "table",
-         'SELECT platform_title AS "Площадка", content_count AS "Публикации", '
-         'followers AS "Подписчики", views AS "Просмотры", reach AS "Охват", '
-         'likes AS "Лайки/реакции", comments AS "Комментарии", shares AS "Репосты", '
-         'saves AS "Сохранения", avg_views AS "Средние просмотры", '
+         'WITH filtered AS (SELECT platform, platform_title, COUNT(*) AS content_count, '
+         'SUM(views) AS views, SUM(reach) AS reach, SUM(likes) AS likes, '
+         'SUM(comments) AS comments, SUM(shares) AS shares, SUM(saves) AS saves, '
+         'ROUND(AVG(views), 0) AS avg_views, '
+         'ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) AS engagement_rate, '
+         'MAX(published_at) AS last_published_at FROM v_social_content '
+         '[[WHERE {{period}}]] GROUP BY platform, platform_title) '
+         'SELECT filtered.platform_title AS "Площадка", content_count AS "Публикации", '
+         'channels.followers AS "Подписчики", filtered.views AS "Просмотры", '
+         'filtered.reach AS "Охват", filtered.likes AS "Лайки/реакции", '
+         'filtered.comments AS "Комментарии", filtered.shares AS "Репосты", '
+         'filtered.saves AS "Сохранения", avg_views AS "Средние просмотры", '
          'engagement_rate AS "Вовлечённость, %", '
-         "TO_CHAR(last_published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
-         'AS "Последняя публикация" '
-         'FROM v_social_channels ORDER BY views DESC',
-         "Полная сравнительная таблица площадок"),
-    Card("social_views_by_platform", "Соцсети · Просмотры по площадкам", "v_social_channels", "bar",
-         'SELECT platform_title AS "Площадка", views AS "Просмотры" '
-         'FROM v_social_channels ORDER BY views DESC',
-         "Вклад каждой площадки в суммарные просмотры"),
-    Card("social_engagement_by_platform", "Соцсети · Реакции по площадкам", "v_social_channels", "bar",
-         'SELECT platform_title AS "Площадка", engagements AS "Реакции" '
-         'FROM v_social_channels ORDER BY engagements DESC',
-         "Сумма всех взаимодействий по площадкам"),
+         "TO_CHAR(filtered.last_published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Последняя публикация" FROM filtered LEFT JOIN v_social_channels channels '
+         'ON channels.platform = filtered.platform ORDER BY filtered.views DESC',
+         "Сравнение площадок по публикациям выбранного периода",
+         date_filter=CONTENT_PERIOD),
+    Card("social_views_by_platform", "Соцсети · Просмотры по площадкам", "v_social_content", "bar",
+         'SELECT platform_title AS "Площадка", SUM(views) AS "Просмотры" '
+         'FROM v_social_content [[WHERE {{period}}]] GROUP BY platform_title '
+         'ORDER BY SUM(views) DESC',
+         "Просмотры публикаций выбранного периода по площадкам",
+         date_filter=CONTENT_PERIOD),
+    Card("social_engagement_by_platform", "Соцсети · Реакции по площадкам", "v_social_content", "bar",
+         'SELECT platform_title AS "Площадка", SUM(engagements) AS "Реакции" '
+         'FROM v_social_content [[WHERE {{period}}]] GROUP BY platform_title '
+         'ORDER BY SUM(engagements) DESC',
+         "Реакции на публикации выбранного периода по площадкам",
+         date_filter=CONTENT_PERIOD),
     Card("social_posts_by_month", "Соцсети · Публикации по месяцам", "v_social_content", "line",
          'SELECT date_trunc(\'month\', published_at) AS "Месяц", '
          'platform_title AS "Площадка", COUNT(*) AS "Публикации" '
-         'FROM v_social_content GROUP BY 1, 2 ORDER BY 1, 2',
-         "Контентная активность по месяцам и площадкам"),
+         'FROM v_social_content [[WHERE {{period}}]] GROUP BY 1, 2 ORDER BY 1, 2',
+         "Контентная активность по месяцам и площадкам",
+         date_filter=CONTENT_PERIOD),
     Card("social_formats", "Соцсети · Форматы контента", "v_social_content", "bar",
          'SELECT platform_title || \' · \' || content_type_title AS "Площадка · формат", '
-         'COUNT(*) AS "Публикации" FROM v_social_content GROUP BY 1 ORDER BY 2 DESC',
-         "Видео, Shorts, фото и посты"),
+         'COUNT(*) AS "Публикации" FROM v_social_content [[WHERE {{period}}]] '
+         'GROUP BY 1 ORDER BY 2 DESC',
+         "Видео, Shorts, фото и посты выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_followers_by_platform", "Соцсети · Подписчики по площадкам", "v_social_channels", "bar",
          'SELECT platform_title AS "Площадка", followers AS "Подписчики" '
          'FROM v_social_channels WHERE followers IS NOT NULL ORDER BY followers DESC',
@@ -235,13 +265,15 @@ SOCIAL_CARDS: list[Card] = [
     Card("social_daily_views", "Соцсети · Дневные просмотры каналов", "v_social_daily", "line",
          'SELECT snapshot_date AS "День", platform_title AS "Площадка", '
          'video_views AS "Просмотры" FROM v_social_daily '
-         'WHERE video_views IS NOT NULL AND video_views > 0 ORDER BY 1, 2',
-         "Дневные просмотры из channel-level аналитики"),
+         'WHERE video_views IS NOT NULL AND video_views > 0 [[AND {{period}}]] ORDER BY 1, 2',
+         "Дневные просмотры из channel-level аналитики",
+         date_filter=DAILY_PERIOD),
     Card("social_followers_history", "Соцсети · Динамика подписчиков", "v_social_daily", "line",
          'SELECT snapshot_date AS "День", platform_title AS "Площадка", '
          'followers AS "Подписчики" FROM v_social_daily '
-         'WHERE followers IS NOT NULL ORDER BY 1, 2',
-         "История доступных снимков аудитории"),
+         'WHERE followers IS NOT NULL [[AND {{period}}]] ORDER BY 1, 2',
+         "История доступных снимков аудитории",
+         date_filter=DAILY_PERIOD),
 
     # Лучший контент
     Card("social_top_views", "Соцсети · Топ публикаций по просмотрам", "v_social_content", "table",
@@ -250,8 +282,9 @@ SOCIAL_CARDS: list[Card] = [
          'LEFT(title, 140) AS "Публикация", '
          'content_type_title AS "Формат", views AS "Просмотры", reach AS "Охват", '
          'engagements AS "Реакции", engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
-         'FROM v_social_content ORDER BY views DESC LIMIT 25',
-         "25 самых просматриваемых публикаций"),
+         'FROM v_social_content [[WHERE {{period}}]] ORDER BY views DESC LIMIT 25',
+         "25 самых просматриваемых публикаций выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_top_er", "Соцсети · Топ по вовлечённости", "v_social_content", "table",
          'SELECT platform_title AS "Площадка", '
          "TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') AS \"Дата\", "
@@ -259,9 +292,10 @@ SOCIAL_CARDS: list[Card] = [
          'views AS "Просмотры", likes AS "Лайки/реакции", comments AS "Комментарии", '
          'shares AS "Репосты", saves AS "Сохранения", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
-         'FROM v_social_content WHERE views >= 100 '
+         'FROM v_social_content WHERE views >= 100 [[AND {{period}}]] '
          'ORDER BY engagement_rate DESC, views DESC LIMIT 25',
-         "Высокая вовлечённость без публикаций со слишком малой базой просмотров"),
+         "Высокая вовлечённость за выбранный период без слишком малой базы просмотров",
+         date_filter=CONTENT_PERIOD),
 
     # Площадки
     Card("social_tiktok_platform_summary", "TikTok · Краткая сводка площадки", "v_social_content", "table",
@@ -270,16 +304,18 @@ SOCIAL_CARDS: list[Card] = [
          'ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) '
          'AS "Вовлечённость, %", COALESCE(SUM(new_followers), 0) '
          'AS "Новые подписчики из видео" '
-         "FROM v_social_content WHERE platform = 'tiktok'",
-         "Компактная сводка TikTok рядом с остальными площадками"),
+         "FROM v_social_content WHERE platform = 'tiktok' [[AND {{period}}]]",
+         "Компактная сводка TikTok за выбранный период",
+         date_filter=CONTENT_PERIOD),
     Card("social_tiktok_summary", "TikTok · Полная сводка", "v_social_content", "table",
          'SELECT COUNT(*) AS "Видео", SUM(views) AS "Просмотры", SUM(reach) AS "Охват", '
          'SUM(likes) AS "Лайки", SUM(comments) AS "Комментарии", SUM(shares) AS "Репосты", '
          'SUM(saves) AS "Сохранения", ROUND(AVG(avg_watch_s), 1) AS "Среднее время просмотра, с", '
          'ROUND(AVG(finish_rate_pct), 1) AS "Средний досмотр, %", '
          'SUM(new_followers) AS "Новые подписчики из видео" '
-         "FROM v_social_content WHERE platform = 'tiktok'",
-         "Основные и расширенные показатели TikTok"),
+         "FROM v_social_content WHERE platform = 'tiktok' [[AND {{period}}]]",
+         "Основные и расширенные показатели TikTok за выбранный период",
+         date_filter=CONTENT_PERIOD),
     Card("social_tiktok_watch", "TikTok · Удержание и досмотры", "v_social_content", "table",
          "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
          'AS "Дата", LEFT(title, 140) AS "Видео", views AS "Просмотры", '
@@ -287,33 +323,38 @@ SOCIAL_CARDS: list[Card] = [
          'ROUND(100.0 * avg_watch_s / NULLIF(duration_s, 0), 1) AS "Просмотрено длины, %", '
          'ROUND(finish_rate_pct, 1) AS "Досмотрели, %", '
          'new_followers AS "Новые подписчики", url AS "Ссылка" '
-         "FROM v_social_content WHERE platform = 'tiktok' "
+         "FROM v_social_content WHERE platform = 'tiktok' [[AND {{period}}]] "
          'ORDER BY views DESC LIMIT 25',
-         "Длительность, средний просмотр, досмотр и подписки по видео"),
+         "Удержание и подписки по видео выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_youtube_formats", "YouTube · Shorts и видео", "v_social_content", "table",
          'SELECT content_type_title AS "Формат", COUNT(*) AS "Публикации", '
          'SUM(views) AS "Просмотры", ROUND(AVG(views), 0) AS "Средние просмотры", '
          'SUM(likes) AS "Лайки", SUM(comments) AS "Комментарии", '
          'ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) AS "Вовлечённость, %" '
-         "FROM v_social_content WHERE platform = 'youtube' GROUP BY content_type_title ORDER BY 3 DESC",
-         "Сравнение Shorts и длинных видео"),
+         "FROM v_social_content WHERE platform = 'youtube' [[AND {{period}}]] "
+         "GROUP BY content_type_title ORDER BY 3 DESC",
+         "Сравнение Shorts и длинных видео выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_telegram_top", "Telegram · Лучшие посты", "v_social_content", "table",
          "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
          'AS "Дата", LEFT(title, 140) AS "Пост", views AS "Просмотры", '
          'likes AS "Реакции", comments AS "Ответы", shares AS "Пересылки", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
-         "FROM v_social_content WHERE platform = 'telegram_channel' "
+         "FROM v_social_content WHERE platform = 'telegram_channel' [[AND {{period}}]] "
          'ORDER BY views DESC LIMIT 25',
-         "Просмотры, реакции, ответы и пересылки Telegram"),
+         "Лучшие публикации Telegram выбранного периода",
+         date_filter=CONTENT_PERIOD),
     Card("social_vk_top", "VK · Лучшие публикации", "v_social_content", "table",
          "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
          'AS "Дата", LEFT(title, 140) AS "Публикация", content_type_title AS "Формат", '
          'views AS "Просмотры", reach AS "Охват", likes AS "Лайки", '
          'comments AS "Комментарии", shares AS "Репосты", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
-         "FROM v_social_content WHERE platform = 'vk' "
+         "FROM v_social_content WHERE platform = 'vk' [[AND {{period}}]] "
          'ORDER BY reach DESC, views DESC LIMIT 25',
-         "Охват и взаимодействия публикаций VK"),
+         "Охват публикаций VK выбранного периода",
+         date_filter=CONTENT_PERIOD),
 
     # Качество данных
     Card("social_data_quality", "Соцсети · Полнота данных", "v_social_content", "table",
@@ -349,7 +390,8 @@ SOCIAL_CARDS: list[Card] = [
                      "preserve_whitespace": True,
                  },
              },
-         }),
+         },
+         date_filter=AI_REPORT_PERIOD),
     Card("social_ai_history", "ИИ · Архив отчётов", "v_ai_reports", "table",
          _ai_report_text(limit=50),
          "Последние 50 недельных и разовых разборов с полным текстом",
@@ -361,7 +403,8 @@ SOCIAL_CARDS: list[Card] = [
                      "preserve_whitespace": True,
                  },
              },
-         }),
+         },
+         date_filter=AI_REPORT_PERIOD),
 
     # Расширенная TikTok-аудитория
     Card("social_tiktok_traffic", "TikTok · Источники трафика", "v_social_content", "row",
@@ -371,23 +414,28 @@ SOCIAL_CARDS: list[Card] = [
              "WHEN 'Search' THEN 'Поиск' WHEN 'Follow' THEN 'Подписки' "
              "WHEN 'Sound' THEN 'Звук' WHEN 'Others' THEN 'Другое' ELSE key END",
          ),
-         "Средневзвешенное распределение просмотров TikTok"),
+         "Средневзвешенное распределение просмотров TikTok",
+         date_filter=CONTENT_PERIOD_SC),
     Card("social_tiktok_age", "TikTok · Возраст аудитории", "v_social_content", "bar",
          _tiktok_audience_breakdown("age", "key"),
-         "Средневзвешенная возрастная структура зрителей"),
+         "Средневзвешенная возрастная структура зрителей",
+         date_filter=CONTENT_PERIOD_SC),
     Card("social_tiktok_gender", "TikTok · Пол аудитории", "v_social_content", "pie",
          _tiktok_audience_breakdown(
              "gender",
              "CASE key WHEN 'male_vv' THEN 'Мужчины' WHEN 'female_vv' THEN 'Женщины' "
              "WHEN 'other_vv' THEN 'Другое' ELSE key END",
          ),
-         "Средневзвешенное распределение зрителей по полу"),
+         "Средневзвешенное распределение зрителей по полу",
+         date_filter=CONTENT_PERIOD_SC),
     Card("social_tiktok_geo", "TikTok · География аудитории", "v_social_content", "row",
          _tiktok_audience_breakdown("geo", "key", limit=15),
-         "15 крупнейших стран и регионов аудитории"),
+         "15 крупнейших стран и регионов аудитории",
+         date_filter=CONTENT_PERIOD_SC),
     Card("social_tiktok_search", "TikTok · Поисковые запросы", "v_social_content", "table",
          _tiktok_breakdown("search_terms", "LOWER(key)", limit=25),
-         "Запросы, через которые находят видео"),
+         "Запросы, через которые находят видео",
+         date_filter=CONTENT_PERIOD_SC),
 ]
 
 
