@@ -159,6 +159,25 @@ def _tiktok_audience_breakdown(
     """
 
 
+def _ai_report_text(*, limit: int) -> str:
+    """Одна широкая колонка: метаданные и полный отчёт без горизонтального скролла."""
+    return f"""
+        SELECT CONCAT(
+            'Отчёт #', report_id,
+            ' · ', report_type,
+            ' · ', COALESCE(period, 'Без периода'),
+            ' · ', TO_CHAR(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI'),
+            ' · ', COALESCE(model, 'Модель не указана'),
+            CASE WHEN NULLIF(question, '') IS NOT NULL
+                 THEN E'\\nВопрос: ' || question ELSE '' END,
+            E'\\n\\n', summary
+        ) AS "Отчёт"
+        FROM v_ai_reports
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT {limit}
+    """
+
+
 SOCIAL_CARDS: list[Card] = [
     # KPI
     Card("social_posts", "Соцсети · Публикации", "v_social_content", "scalar",
@@ -320,11 +339,7 @@ SOCIAL_CARDS: list[Card] = [
 
     # Отчёты ИИ-наставника
     Card("social_ai_latest", "ИИ · Последний отчёт", "v_ai_reports", "table",
-         'SELECT report_type AS "Тип", COALESCE(period, \'Без периода\') AS "Период", '
-         "TO_CHAR(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
-         'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
-         'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
-         'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 1',
+         _ai_report_text(limit=1),
          "Полный текст самого свежего разбора ИИ-наставника",
          visualization_settings={
              "table.pagination": False,
@@ -336,12 +351,7 @@ SOCIAL_CARDS: list[Card] = [
              },
          }),
     Card("social_ai_history", "ИИ · Архив отчётов", "v_ai_reports", "table",
-         'SELECT report_id AS "ID", report_type AS "Тип", '
-         'COALESCE(period, \'Без периода\') AS "Период", '
-         "TO_CHAR(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
-         'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
-         'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
-         'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 50',
+         _ai_report_text(limit=50),
          "Последние 50 недельных и разовых разборов с полным текстом",
          visualization_settings={
              "table.pagination": False,

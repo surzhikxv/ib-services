@@ -184,10 +184,12 @@ def test_social_tabs_and_short_titles_cover_every_card():
     ]
 
     cards = {card.key: card for card in SOCIAL_CARDS}
-    assert "ORDER BY created_at DESC, report_id DESC LIMIT 1" in cards[
-        "social_ai_latest"
-    ].metabase_sql
-    assert 'summary AS "Отчёт"' in cards["social_ai_history"].metabase_sql
+    latest_sql = " ".join(cards["social_ai_latest"].metabase_sql.split())
+    history_sql = " ".join(cards["social_ai_history"].metabase_sql.split())
+    assert "ORDER BY created_at DESC, report_id DESC LIMIT 1" in latest_sql
+    assert "ORDER BY created_at DESC, report_id DESC LIMIT 50" in history_sql
+    assert 'CONCAT(' in latest_sql
+    assert 'AS "Отчёт"' in history_sql
     for key in ("social_ai_latest", "social_ai_history"):
         settings = cards[key].visualization_settings
         assert settings is not None
