@@ -10,16 +10,17 @@ from kontur.dashboard.catalog import Card
 
 SOCIAL_DASHBOARD_NAME = "Соцсети — аналитика"
 SOCIAL_DASHBOARD_DESCRIPTION = (
-    "Контент, просмотры, вовлечение, динамика и расширенная аналитика площадок"
+    "Контент, просмотры, вовлечение, динамика площадок и отчёты ИИ-наставника"
 )
 
-# Пять коротких тематических экранов вместо одной ленты длиной в 28 карточек.
+# Шесть коротких тематических экранов вместо одной длинной ленты карточек.
 # ``key`` используется только при провижининге, ``name`` видит пользователь.
 SOCIAL_TABS: list[dict[str, str]] = [
     {"key": "overview", "name": "Обзор"},
     {"key": "content", "name": "Контент"},
     {"key": "platforms", "name": "Площадки"},
     {"key": "tiktok", "name": "TikTok"},
+    {"key": "ai_reports", "name": "ИИ-отчёты"},
     {"key": "data", "name": "Данные"},
 ]
 
@@ -54,6 +55,8 @@ SOCIAL_CARD_TITLES: dict[str, str] = {
     "social_tiktok_gender": "Пол аудитории",
     "social_tiktok_geo": "География аудитории",
     "social_tiktok_search": "Поисковые запросы",
+    "social_ai_latest": "Последний отчёт",
+    "social_ai_history": "Архив отчётов",
 }
 
 SOCIAL_CARD_TABS: dict[str, str] = {
@@ -80,6 +83,7 @@ SOCIAL_CARD_TABS: dict[str, str] = {
         "social_tiktok_age", "social_tiktok_gender", "social_tiktok_geo",
         "social_tiktok_search",
     )},
+    **{key: "ai_reports" for key in ("social_ai_latest", "social_ai_history")},
     **{key: "data" for key in ("social_data_quality", "social_freshness")},
 }
 
@@ -314,6 +318,23 @@ SOCIAL_CARDS: list[Card] = [
          'FROM v_social_channels ORDER BY platform_title',
          "Последняя загрузка каждого источника"),
 
+    # Отчёты ИИ-наставника
+    Card("social_ai_latest", "ИИ · Последний отчёт", "v_ai_reports", "table",
+         'SELECT report_type AS "Тип", COALESCE(period, \'Без периода\') AS "Период", '
+         "TO_CHAR(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
+         'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
+         'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 1',
+         "Полный текст самого свежего разбора ИИ-наставника"),
+    Card("social_ai_history", "ИИ · Архив отчётов", "v_ai_reports", "table",
+         'SELECT report_id AS "ID", report_type AS "Тип", '
+         'COALESCE(period, \'Без периода\') AS "Период", '
+         "TO_CHAR(created_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
+         'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
+         'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 50',
+         "Последние 50 недельных и разовых разборов с полным текстом"),
+
     # Расширенная TikTok-аудитория
     Card("social_tiktok_traffic", "TikTok · Источники трафика", "v_social_content", "row",
          _tiktok_breakdown(
@@ -343,7 +364,7 @@ SOCIAL_CARDS: list[Card] = [
 
 
 def social_grid_layout(cards: list[Card] = SOCIAL_CARDS) -> dict[str, dict]:
-    """Сетка внутри пяти вкладок; номер строки начинается заново на каждой."""
+    """Сетка внутри шести вкладок; номер строки начинается заново на каждой."""
     layout: dict[str, dict] = {}
     for i, card in enumerate(cards[:6]):
         layout[card.key] = {"row": 0, "col": i * 4, "size_x": 4, "size_y": 4}
@@ -374,6 +395,9 @@ def social_grid_layout(cards: list[Card] = SOCIAL_CARDS) -> dict[str, dict]:
         ("social_tiktok_gender", 23, 0, 8, 8),
         ("social_tiktok_geo", 23, 8, 8, 8),
         ("social_tiktok_search", 23, 16, 8, 8),
+        # ИИ-отчёты
+        ("social_ai_latest", 0, 0, 24, 12),
+        ("social_ai_history", 12, 0, 24, 12),
         # Данные
         ("social_freshness", 0, 0, 24, 7),
         ("social_data_quality", 7, 0, 24, 10),

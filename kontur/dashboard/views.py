@@ -129,6 +129,22 @@ VIEWS: dict[str, str] = {
           ON latest.connector = sr.connector
          AND latest.latest_started_at = sr.started_at
     """,
+    "v_ai_reports": """
+        SELECT
+            ar.id AS report_id,
+            ar.kind,
+            CASE ar.kind
+                WHEN 'weekly' THEN 'Еженедельный'
+                WHEN 'adhoc' THEN 'Разовый вопрос'
+                ELSE ar.kind
+            END AS report_type,
+            ar.period,
+            ar.question,
+            ar.summary,
+            ar.model,
+            ar.created_at
+        FROM ai_reports ar
+    """,
     # SQL этих трёх вьюх выбирается по диалекту в _view_sql(). Пустое значение
     # оставляет их частью публичного реестра VIEWS и источником истины для каталога.
     "v_social_content": "",

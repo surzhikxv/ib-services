@@ -13,7 +13,7 @@ from kontur.dashboard.social_catalog import (
 )
 from kontur.dashboard.views import VIEWS, create_views
 from kontur.db import init_db, make_session_factory
-from kontur.models import Channel, ChannelMetric, Content, ContentMetric
+from kontur.models import AiReport, Channel, ChannelMetric, Content, ContentMetric
 
 
 def _social_db():
@@ -87,6 +87,13 @@ def _social_db():
                 snapshot_date=date(2026, 7, 3),
                 followers=301,
             ),
+            AiReport(
+                kind="weekly",
+                period="2026-W28",
+                summary="# Недельный разбор\n\nГлавный приоритет — воронка.",
+                digest={"analysis_period": "2026-W28"},
+                model="test-model",
+            ),
         ])
         session.commit()
     create_views(engine)
@@ -133,6 +140,17 @@ def test_every_social_card_points_to_a_queryable_view():
         _rows(factory, card.probe_sql)
 
 
+def test_ai_reports_view_exposes_dashboard_safe_report_fields():
+    _, factory = _social_db()
+    rows = _rows(factory, "SELECT * FROM v_ai_reports")
+
+    assert len(rows) == 1
+    assert rows[0]["report_type"] == "Еженедельный"
+    assert rows[0]["period"] == "2026-W28"
+    assert rows[0]["summary"].startswith("# Недельный разбор")
+    assert rows[0]["model"] == "test-model"
+
+
 def test_social_layout_covers_cards_without_overlap():
     layout = social_grid_layout()
     assert set(layout) == {card.key for card in SOCIAL_CARDS}
@@ -162,5 +180,11 @@ def test_social_tabs_and_short_titles_cover_every_card():
     assert set(SOCIAL_CARD_TITLES) == card_keys
     assert set(SOCIAL_CARD_TABS.values()) == tab_keys
     assert [tab["name"] for tab in SOCIAL_TABS] == [
-        "Обзор", "Контент", "Площадки", "TikTok", "Данные"
+        "Обзор", "Контент", "Площадки", "TikTok", "ИИ-отчёты", "Данные"
     ]
+
+    cards = {card.key: card for card in SOCIAL_CARDS}
+    assert "ORDER BY created_at DESC, report_id DESC LIMIT 1" in cards[
+        "social_ai_latest"
+    ].metabase_sql
+    assert 'summary AS "Отчёт"' in cards["social_ai_history"].metabase_sql
