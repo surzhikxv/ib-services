@@ -15,6 +15,12 @@ import os
 import httpx
 
 from kontur.dashboard.catalog import CARDS, COLLECTION_NAME, DASHBOARD_NAME, Card
+from kontur.dashboard.social_catalog import (
+    SOCIAL_CARDS,
+    SOCIAL_DASHBOARD_DESCRIPTION,
+    SOCIAL_DASHBOARD_NAME,
+    social_grid_layout,
+)
 
 GRID_COLS = 24
 
@@ -146,11 +152,12 @@ def ensure_cards(
     mb: MetabaseClient,
     database_id: int,
     collection_id: int | None = None,
+    cards: list[Card] = CARDS,
 ) -> dict[str, int]:
     """Создаёт/обновляет вопросы из каталога. Возвращает card.key -> id вопроса."""
     by_name = _index_by_name(mb.get("/api/card"))
     result: dict[str, int] = {}
-    for card in CARDS:
+    for card in cards:
         payload = card_payload(card, database_id, collection_id)
         if card.name in by_name:
             cid = by_name[card.name]
@@ -166,14 +173,17 @@ def ensure_dashboard(
     card_ids: dict[str, int],
     collection_id: int | None = None,
     name: str = DASHBOARD_NAME,
+    cards: list[Card] = CARDS,
+    layout: dict[str, dict] | None = None,
+    description: str = "Продажи, воронка, источники трафика и свежесть данных",
 ) -> int:
     """Создаёт дашборд (если нет) и раскладывает карточки по сетке."""
     existing = _index_by_name(mb.get("/api/dashboard"))
     dash_id = existing.get(name) or mb.post("/api/dashboard", {"name": name})["id"]
 
-    layout = grid_layout(CARDS)
+    layout = layout or grid_layout(cards)
     dashcards = []
-    for i, card in enumerate(CARDS):
+    for i, card in enumerate(cards):
         pos = layout[card.key]
         dashcards.append({
             "id": -(i + 1),  # отрицательные id = новые карточки
@@ -185,7 +195,7 @@ def ensure_dashboard(
         f"/api/dashboard/{dash_id}",
         {
             "name": name,
-            "description": "Продажи, воронка, источники трафика и свежесть данных",
+            "description": description,
             "collection_id": collection_id,
             "dashcards": dashcards,
         },
@@ -200,13 +210,26 @@ def provision(base_url: str, username: str, password: str) -> dict:
         mb.login(username, password)
         db_id = ensure_database(mb)
         collection_id = ensure_collection(mb)
-        card_ids = ensure_cards(mb, db_id, collection_id)
-        dash_id = ensure_dashboard(mb, card_ids, collection_id)
+        business_card_ids = ensure_cards(mb, db_id, collection_id, CARDS)
+        business_dash_id = ensure_dashboard(mb, business_card_ids, collection_id)
+        social_card_ids = ensure_cards(mb, db_id, collection_id, SOCIAL_CARDS)
+        social_dash_id = ensure_dashboard(
+            mb,
+            social_card_ids,
+            collection_id,
+            name=SOCIAL_DASHBOARD_NAME,
+            cards=SOCIAL_CARDS,
+            layout=social_grid_layout(SOCIAL_CARDS),
+            description=SOCIAL_DASHBOARD_DESCRIPTION,
+        )
         return {
             "database_id": db_id,
             "collection_id": collection_id,
-            "cards": len(card_ids),
-            "dashboard_id": dash_id,
+            "cards": len(business_card_ids) + len(social_card_ids),
+            "dashboards": {
+                "business": business_dash_id,
+                "social": social_dash_id,
+            },
         }
     finally:
         mb.close()
