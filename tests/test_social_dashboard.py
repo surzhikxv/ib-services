@@ -188,3 +188,11 @@ def test_social_tabs_and_short_titles_cover_every_card():
         "social_ai_latest"
     ].metabase_sql
     assert 'summary AS "Отчёт"' in cards["social_ai_history"].metabase_sql
+    for key in ("social_ai_latest", "social_ai_history"):
+        settings = cards[key].visualization_settings
+        assert settings is not None
+        assert settings["table.pagination"] is False
+        assert settings["column_settings"]['["name","Отчёт"]'] == {
+            "text_wrapping": True,
+            "preserve_whitespace": True,
+        }

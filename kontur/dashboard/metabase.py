@@ -42,7 +42,7 @@ def card_payload(card: Card, database_id: int, collection_id: int | None = None)
             "native": {"query": card.metabase_sql},
             "database": database_id,
         },
-        "visualization_settings": {},
+        "visualization_settings": card.visualization_settings or {},
     }
 
 

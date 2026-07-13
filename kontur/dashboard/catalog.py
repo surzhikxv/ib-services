@@ -21,6 +21,7 @@ class Card:
     display: str  # scalar | funnel | bar | row | line | table
     metabase_sql: str
     description: str = ""
+    visualization_settings: dict | None = None
 
     @property
     def probe_sql(self) -> str:

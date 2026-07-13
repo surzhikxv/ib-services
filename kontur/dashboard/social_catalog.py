@@ -325,7 +325,16 @@ SOCIAL_CARDS: list[Card] = [
          'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
          'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
          'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 1',
-         "Полный текст самого свежего разбора ИИ-наставника"),
+         "Полный текст самого свежего разбора ИИ-наставника",
+         visualization_settings={
+             "table.pagination": False,
+             "column_settings": {
+                 '["name","Отчёт"]': {
+                     "text_wrapping": True,
+                     "preserve_whitespace": True,
+                 },
+             },
+         }),
     Card("social_ai_history", "ИИ · Архив отчётов", "v_ai_reports", "table",
          'SELECT report_id AS "ID", report_type AS "Тип", '
          'COALESCE(period, \'Без периода\') AS "Период", '
@@ -333,7 +342,16 @@ SOCIAL_CARDS: list[Card] = [
          'AS "Создан (МСК)", COALESCE(model, \'Не указана\') AS "Модель", '
          'COALESCE(question, \'\') AS "Вопрос", summary AS "Отчёт" '
          'FROM v_ai_reports ORDER BY created_at DESC, report_id DESC LIMIT 50',
-         "Последние 50 недельных и разовых разборов с полным текстом"),
+         "Последние 50 недельных и разовых разборов с полным текстом",
+         visualization_settings={
+             "table.pagination": False,
+             "column_settings": {
+                 '["name","Отчёт"]': {
+                     "text_wrapping": True,
+                     "preserve_whitespace": True,
+                 },
+             },
+         }),
 
     # Расширенная TikTok-аудитория
     Card("social_tiktok_traffic", "TikTok · Источники трафика", "v_social_content", "row",

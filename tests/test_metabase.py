@@ -30,6 +30,25 @@ def test_card_payload_places_card_in_project_collection():
     assert card_payload(card, database_id=7, collection_id=9)["collection_id"] == 9
 
 
+def test_card_payload_preserves_visualization_settings():
+    settings = {
+        "table.pagination": False,
+        "column_settings": {
+            '["name","Отчёт"]': {"text_wrapping": True},
+        },
+    }
+    card = Card(
+        "k",
+        "ИИ · Последний отчёт",
+        "v_ai_reports",
+        "table",
+        "SELECT summary AS \"Отчёт\" FROM v_ai_reports",
+        visualization_settings=settings,
+    )
+
+    assert card_payload(card, database_id=7)["visualization_settings"] == settings
+
+
 def test_grid_layout_places_scalars_on_top_row():
     layout = grid_layout(CARDS)
     scalars = [c for c in CARDS if c.display == "scalar"]
