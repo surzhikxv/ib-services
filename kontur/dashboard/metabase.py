@@ -14,18 +14,24 @@ import os
 
 import httpx
 
-from kontur.dashboard.catalog import CARDS, COLLECTION_NAME, DASHBOARD_NAME, Card
+from kontur.dashboard.catalog import (
+    CARDS,
+    COLLECTION_NAME,
+    DASHBOARD_NAME,
+    LEGACY_DASHBOARD_NAME,
+    Card,
+)
 from kontur.dashboard.social_catalog import (
     SOCIAL_CARD_TABS,
     SOCIAL_CARD_TITLES,
     SOCIAL_CARDS,
-    SOCIAL_DASHBOARD_DESCRIPTION,
     SOCIAL_DASHBOARD_NAME,
     SOCIAL_TABS,
     social_grid_layout,
 )
 
 GRID_COLS = 24
+BUSINESS_TAB = {"key": "business", "name": "Бизнес"}
 
 
 # --- чистые помощники (тестируемы) ---------------------------------------
@@ -89,6 +95,23 @@ def resolve_dashboard_tabs(
     return payload, ids_by_key
 
 
+def unified_dashboard_config() -> tuple[
+    list[Card],
+    list[dict[str, str]],
+    dict[str, str],
+    dict[str, dict],
+]:
+    """Все разделы проекта в одном дашборде с независимыми сетками вкладок."""
+    cards = [*CARDS, *SOCIAL_CARDS]
+    tabs = [BUSINESS_TAB.copy(), *[tab.copy() for tab in SOCIAL_TABS]]
+    card_tabs = {
+        **{card.key: BUSINESS_TAB["key"] for card in CARDS},
+        **SOCIAL_CARD_TABS,
+    }
+    layout = {**grid_layout(CARDS), **social_grid_layout(SOCIAL_CARDS)}
+    return cards, tabs, card_tabs, layout
+
+
 # --- HTTP-клиент Metabase (исполняется против живого инстанса) ------------
 
 class MetabaseClient:
@@ -118,7 +141,7 @@ class MetabaseClient:
     def put(self, path: str, json: dict):
         r = self._http.put(path, json=json, headers=self._headers)
         r.raise_for_status()
-        return r.json()
+        return r.json() if r.content else None
 
     def close(self) -> None:
         self._http.close()
@@ -202,10 +225,16 @@ def ensure_dashboard(
     tabs: list[dict[str, str]] | None = None,
     card_tabs: dict[str, str] | None = None,
     card_titles: dict[str, str] | None = None,
+    aliases: tuple[str, ...] = (),
 ) -> int:
-    """Создаёт дашборд (если нет) и раскладывает карточки по сетке."""
+    """Создаёт дашборд или переиспользует прежнее имя и раскладывает карточки."""
     existing = _index_by_name(mb.get("/api/dashboard"))
     existing_dash_id = existing.get(name)
+    if existing_dash_id is None:
+        existing_dash_id = next(
+            (existing[alias] for alias in aliases if alias in existing),
+            None,
+        )
     dash_id = existing_dash_id or mb.post("/api/dashboard", {"name": name})["id"]
 
     layout = layout or grid_layout(cards)
@@ -245,6 +274,27 @@ def ensure_dashboard(
     return dash_id
 
 
+def archive_dashboard_by_name(
+    mb: MetabaseClient,
+    name: str,
+    *,
+    keep_id: int | None = None,
+) -> int | None:
+    """Архивирует устаревшую точку входа, не удаляя её карточки и историю."""
+    for dashboard in mb.get("/api/dashboard"):
+        if dashboard.get("name") == name and dashboard.get("id") != keep_id:
+            dashboard_id = dashboard["id"]
+            mb.put(f"/api/dashboard/{dashboard_id}", {"archived": True})
+            return dashboard_id
+    return None
+
+
+def set_custom_homepage(mb: MetabaseClient, dashboard_id: int) -> None:
+    """Открывает единый дашборд вместо ленты последних вопросов Metabase."""
+    mb.put("/api/setting/custom-homepage-dashboard", {"value": dashboard_id})
+    mb.put("/api/setting/custom-homepage", {"value": True})
+
+
 def provision(base_url: str, username: str, password: str) -> dict:
     """Полный цикл: логин → источник-БД → карточки → дашборд. Возвращает сводку."""
     mb = MetabaseClient(base_url)
@@ -253,28 +303,36 @@ def provision(base_url: str, username: str, password: str) -> dict:
         db_id = ensure_database(mb)
         collection_id = ensure_collection(mb)
         business_card_ids = ensure_cards(mb, db_id, collection_id, CARDS)
-        business_dash_id = ensure_dashboard(mb, business_card_ids, collection_id)
         social_card_ids = ensure_cards(mb, db_id, collection_id, SOCIAL_CARDS)
-        social_dash_id = ensure_dashboard(
+        cards, tabs, card_tabs, layout = unified_dashboard_config()
+        dashboard_id = ensure_dashboard(
             mb,
-            social_card_ids,
+            {**business_card_ids, **social_card_ids},
             collection_id,
-            name=SOCIAL_DASHBOARD_NAME,
-            cards=SOCIAL_CARDS,
-            layout=social_grid_layout(SOCIAL_CARDS),
-            description=SOCIAL_DASHBOARD_DESCRIPTION,
-            tabs=SOCIAL_TABS,
-            card_tabs=SOCIAL_CARD_TABS,
+            name=DASHBOARD_NAME,
+            aliases=(LEGACY_DASHBOARD_NAME,),
+            cards=cards,
+            layout=layout,
+            description=(
+                "Продажи, воронка, контент, социальные сети и отчёты ИИ-наставника"
+            ),
+            tabs=tabs,
+            card_tabs=card_tabs,
             card_titles=SOCIAL_CARD_TITLES,
         )
+        archived_social_id = archive_dashboard_by_name(
+            mb,
+            SOCIAL_DASHBOARD_NAME,
+            keep_id=dashboard_id,
+        )
+        set_custom_homepage(mb, dashboard_id)
         return {
             "database_id": db_id,
             "collection_id": collection_id,
             "cards": len(business_card_ids) + len(social_card_ids),
-            "dashboards": {
-                "business": business_dash_id,
-                "social": social_dash_id,
-            },
+            "dashboard_id": dashboard_id,
+            "homepage_dashboard_id": dashboard_id,
+            "archived_dashboard_id": archived_social_id,
         }
     finally:
         mb.close()

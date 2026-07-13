@@ -16,7 +16,7 @@ SOCIAL_DASHBOARD_DESCRIPTION = (
 # Шесть коротких тематических экранов вместо одной длинной ленты карточек.
 # ``key`` используется только при провижининге, ``name`` видит пользователь.
 SOCIAL_TABS: list[dict[str, str]] = [
-    {"key": "overview", "name": "Обзор"},
+    {"key": "overview", "name": "Соцсети"},
     {"key": "content", "name": "Контент"},
     {"key": "platforms", "name": "Площадки"},
     {"key": "tiktok", "name": "TikTok"},

@@ -3,16 +3,23 @@
 HTTP-хореография Metabase API исполняется только против живого инстанса (на VPS),
 а вот сборка payload карточки и раскладка дашборда — чистые и тестируемы.
 """
+import httpx
+
 from kontur.dashboard.catalog import CARDS, Card
 from kontur.dashboard.metabase import (
+    MetabaseClient,
     _pg_details,
+    archive_dashboard_by_name,
     card_payload,
     ensure_dashboard,
     ensure_collection,
     ensure_database,
     grid_layout,
     resolve_dashboard_tabs,
+    set_custom_homepage,
+    unified_dashboard_config,
 )
+from kontur.dashboard.social_catalog import SOCIAL_CARDS
 
 
 def test_card_payload_builds_native_query():
@@ -23,6 +30,22 @@ def test_card_payload_builds_native_query():
     assert p["dataset_query"]["type"] == "native"
     assert p["dataset_query"]["database"] == 7
     assert p["dataset_query"]["native"]["query"] == "SELECT subscribers FROM v_kpis"
+
+
+def test_metabase_client_accepts_empty_setting_put_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session":
+            return httpx.Response(200, json={"id": "session"})
+        if request.url.path == "/api/setting/custom-homepage":
+            return httpx.Response(204)
+        raise AssertionError((request.method, request.url.path))
+
+    mb = MetabaseClient("http://metabase", transport=httpx.MockTransport(handler))
+    try:
+        mb.login("admin@example.com", "secret")
+        assert mb.put("/api/setting/custom-homepage", {"value": True}) is None
+    finally:
+        mb.close()
 
 
 def test_card_payload_places_card_in_project_collection():
@@ -206,3 +229,76 @@ def test_ensure_dashboard_places_cards_on_tabs_and_uses_short_titles():
     assert mb.payload["dashcards"][0]["visualization_settings"] == {
         "card.title": "Просмотры"
     }
+
+
+def test_unified_dashboard_has_one_tab_for_every_business_and_social_card():
+    cards, tabs, card_tabs, layout = unified_dashboard_config()
+    card_keys = {card.key for card in cards}
+
+    assert len(cards) == len(CARDS) + len(SOCIAL_CARDS)
+    assert [tab["name"] for tab in tabs] == [
+        "Бизнес", "Соцсети", "Контент", "Площадки",
+        "TikTok", "ИИ-отчёты", "Данные",
+    ]
+    assert set(card_tabs) == card_keys
+    assert set(layout) == card_keys
+    assert {card_tabs[card.key] for card in CARDS} == {"business"}
+
+
+def test_ensure_dashboard_reuses_legacy_name_instead_of_creating_duplicate():
+    card = Card("k", "Подписчиков", "v_kpis", "scalar", "SELECT 1")
+
+    class FakeMetabase:
+        def __init__(self):
+            self.payload = None
+
+        def get(self, path):
+            assert path == "/api/dashboard"
+            return [{"id": 2, "name": "Контур роста — обзор"}]
+
+        def put(self, path, json):
+            assert path == "/api/dashboard/2"
+            self.payload = json
+
+        def post(self, path, json):  # pragma: no cover
+            raise AssertionError((path, json))
+
+    mb = FakeMetabase()
+    dashboard_id = ensure_dashboard(
+        mb,
+        {"k": 9},
+        name="Контур роста — аналитика",
+        aliases=("Контур роста — обзор",),
+        cards=[card],
+        layout={"k": {"row": 0, "col": 0, "size_x": 4, "size_y": 4}},
+    )
+
+    assert dashboard_id == 2
+    assert mb.payload["name"] == "Контур роста — аналитика"
+
+
+def test_archive_old_dashboard_and_set_unified_dashboard_as_homepage():
+    class FakeMetabase:
+        def __init__(self):
+            self.puts = []
+
+        def get(self, path):
+            assert path == "/api/dashboard"
+            return [
+                {"id": 2, "name": "Контур роста — аналитика"},
+                {"id": 3, "name": "Соцсети — аналитика"},
+            ]
+
+        def put(self, path, json):
+            self.puts.append((path, json))
+
+    mb = FakeMetabase()
+
+    assert archive_dashboard_by_name(mb, "Соцсети — аналитика", keep_id=2) == 3
+    set_custom_homepage(mb, 2)
+
+    assert mb.puts == [
+        ("/api/dashboard/3", {"archived": True}),
+        ("/api/setting/custom-homepage-dashboard", {"value": 2}),
+        ("/api/setting/custom-homepage", {"value": True}),
+    ]

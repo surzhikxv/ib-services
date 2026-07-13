@@ -28,7 +28,8 @@ class Card:
         return f"SELECT * FROM {self.view} LIMIT 1"
 
 
-DASHBOARD_NAME = "Контур роста — обзор"
+LEGACY_DASHBOARD_NAME = "Контур роста — обзор"
+DASHBOARD_NAME = "Контур роста — аналитика"
 COLLECTION_NAME = "Контур роста"
 
 CARDS: list[Card] = [

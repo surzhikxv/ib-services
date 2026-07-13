@@ -180,7 +180,7 @@ def test_social_tabs_and_short_titles_cover_every_card():
     assert set(SOCIAL_CARD_TITLES) == card_keys
     assert set(SOCIAL_CARD_TABS.values()) == tab_keys
     assert [tab["name"] for tab in SOCIAL_TABS] == [
-        "Обзор", "Контент", "Площадки", "TikTok", "ИИ-отчёты", "Данные"
+        "Соцсети", "Контент", "Площадки", "TikTok", "ИИ-отчёты", "Данные"
     ]
 
     cards = {card.key: card for card in SOCIAL_CARDS}
