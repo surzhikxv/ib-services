@@ -223,12 +223,14 @@ SOCIAL_CARDS: list[Card] = [
          'ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) AS engagement_rate, '
          'MAX(published_at) AS last_published_at FROM v_social_content '
          '[[WHERE {{period}}]] GROUP BY platform, platform_title) '
-         'SELECT filtered.platform_title AS "Площадка", content_count AS "Публикации", '
+         'SELECT filtered.platform_title AS "Площадка", '
+         'filtered.content_count AS "Публикации", '
          'channels.followers AS "Подписчики", filtered.views AS "Просмотры", '
          'filtered.reach AS "Охват", filtered.likes AS "Лайки/реакции", '
          'filtered.comments AS "Комментарии", filtered.shares AS "Репосты", '
-         'filtered.saves AS "Сохранения", avg_views AS "Средние просмотры", '
-         'engagement_rate AS "Вовлечённость, %", '
+         'filtered.saves AS "Сохранения", '
+         'filtered.avg_views AS "Средние просмотры", '
+         'filtered.engagement_rate AS "Вовлечённость, %", '
          "TO_CHAR(filtered.last_published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
          'AS "Последняя публикация" FROM filtered LEFT JOIN v_social_channels channels '
          'ON channels.platform = filtered.platform ORDER BY filtered.views DESC',

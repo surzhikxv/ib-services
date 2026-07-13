@@ -198,3 +198,12 @@ def test_social_tabs_and_short_titles_cover_every_card():
             "text_wrapping": True,
             "preserve_whitespace": True,
         }
+
+
+def test_platform_overview_qualifies_columns_shared_with_channel_view():
+    cards = {card.key: card for card in SOCIAL_CARDS}
+    sql = " ".join(cards["social_platform_overview"].metabase_sql.split())
+
+    assert 'filtered.content_count AS "Публикации"' in sql
+    assert 'filtered.avg_views AS "Средние просмотры"' in sql
+    assert 'filtered.engagement_rate AS "Вовлечённость, %"' in sql
