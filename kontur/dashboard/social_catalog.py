@@ -13,6 +13,74 @@ SOCIAL_DASHBOARD_DESCRIPTION = (
     "Контент, просмотры, вовлечение, динамика и расширенная аналитика площадок"
 )
 
+# Пять коротких тематических экранов вместо одной ленты длиной в 28 карточек.
+# ``key`` используется только при провижининге, ``name`` видит пользователь.
+SOCIAL_TABS: list[dict[str, str]] = [
+    {"key": "overview", "name": "Обзор"},
+    {"key": "content", "name": "Контент"},
+    {"key": "platforms", "name": "Площадки"},
+    {"key": "tiktok", "name": "TikTok"},
+    {"key": "data", "name": "Данные"},
+]
+
+# Короткие заголовки не повторяют название дашборда и активной вкладки.
+SOCIAL_CARD_TITLES: dict[str, str] = {
+    "social_posts": "Публикации",
+    "social_views": "Просмотры",
+    "social_engagements": "Реакции",
+    "social_er": "Вовлечённость, %",
+    "social_avg_views": "Средние просмотры",
+    "social_followers": "Известные подписчики",
+    "social_platform_overview": "Сводка по площадкам",
+    "social_views_by_platform": "Просмотры по площадкам",
+    "social_engagement_by_platform": "Реакции по площадкам",
+    "social_posts_by_month": "Публикации по месяцам",
+    "social_formats": "Форматы контента",
+    "social_followers_by_platform": "Подписчики по площадкам",
+    "social_daily_views": "Дневные просмотры",
+    "social_followers_history": "Динамика подписчиков",
+    "social_top_views": "Топ публикаций по просмотрам",
+    "social_top_er": "Топ публикаций по вовлечённости",
+    "social_tiktok_summary": "Главные показатели",
+    "social_tiktok_watch": "Удержание и досмотры",
+    "social_youtube_formats": "YouTube: Shorts и видео",
+    "social_telegram_top": "Telegram: лучшие посты",
+    "social_vk_top": "VK: лучшие публикации",
+    "social_data_quality": "Полнота данных",
+    "social_freshness": "Свежесть загрузок",
+    "social_tiktok_traffic": "Источники трафика",
+    "social_tiktok_age": "Возраст аудитории",
+    "social_tiktok_gender": "Пол аудитории",
+    "social_tiktok_geo": "География аудитории",
+    "social_tiktok_search": "Поисковые запросы",
+}
+
+SOCIAL_CARD_TABS: dict[str, str] = {
+    # Обзор: что происходит сейчас и как меняется во времени.
+    **{key: "overview" for key in (
+        "social_posts", "social_views", "social_engagements", "social_er",
+        "social_avg_views", "social_followers", "social_platform_overview",
+        "social_views_by_platform", "social_engagement_by_platform",
+        "social_posts_by_month", "social_daily_views",
+    )},
+    # Контент: форматы и лучшие материалы без платформенных деталей.
+    **{key: "content" for key in (
+        "social_formats", "social_top_views", "social_top_er",
+    )},
+    # Площадки: аудитория и отдельные срезы Telegram, VK, YouTube.
+    **{key: "platforms" for key in (
+        "social_followers_by_platform", "social_followers_history",
+        "social_youtube_formats", "social_telegram_top", "social_vk_top",
+    )},
+    # TikTok: расширенная выгрузка удержания и аудитории.
+    **{key: "tiktok" for key in (
+        "social_tiktok_summary", "social_tiktok_watch", "social_tiktok_traffic",
+        "social_tiktok_age", "social_tiktok_gender", "social_tiktok_geo",
+        "social_tiktok_search",
+    )},
+    **{key: "data" for key in ("social_data_quality", "social_freshness")},
+}
+
 
 def _tiktok_breakdown(path: str, label_sql: str, *, limit: int | None = None) -> str:
     limit_sql = f" LIMIT {limit}" if limit else ""
@@ -113,7 +181,9 @@ SOCIAL_CARDS: list[Card] = [
          'followers AS "Подписчики", views AS "Просмотры", reach AS "Охват", '
          'likes AS "Лайки/реакции", comments AS "Комментарии", shares AS "Репосты", '
          'saves AS "Сохранения", avg_views AS "Средние просмотры", '
-         'engagement_rate AS "Вовлечённость, %", last_published_at AS "Последняя публикация" '
+         'engagement_rate AS "Вовлечённость, %", '
+         "TO_CHAR(last_published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Последняя публикация" '
          'FROM v_social_channels ORDER BY views DESC',
          "Полная сравнительная таблица площадок"),
     Card("social_views_by_platform", "Соцсети · Просмотры по площадкам", "v_social_channels", "bar",
@@ -150,13 +220,17 @@ SOCIAL_CARDS: list[Card] = [
 
     # Лучший контент
     Card("social_top_views", "Соцсети · Топ публикаций по просмотрам", "v_social_content", "table",
-         'SELECT platform_title AS "Площадка", published_at AS "Дата", title AS "Публикация", '
+         'SELECT platform_title AS "Площадка", '
+         "TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') AS \"Дата\", "
+         'LEFT(title, 140) AS "Публикация", '
          'content_type_title AS "Формат", views AS "Просмотры", reach AS "Охват", '
          'engagements AS "Реакции", engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
          'FROM v_social_content ORDER BY views DESC LIMIT 25',
          "25 самых просматриваемых публикаций"),
     Card("social_top_er", "Соцсети · Топ по вовлечённости", "v_social_content", "table",
-         'SELECT platform_title AS "Площадка", published_at AS "Дата", title AS "Публикация", '
+         'SELECT platform_title AS "Площадка", '
+         "TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') AS \"Дата\", "
+         'LEFT(title, 140) AS "Публикация", '
          'views AS "Просмотры", likes AS "Лайки/реакции", comments AS "Комментарии", '
          'shares AS "Репосты", saves AS "Сохранения", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
@@ -174,7 +248,8 @@ SOCIAL_CARDS: list[Card] = [
          "FROM v_social_content WHERE platform = 'tiktok'",
          "Основные и расширенные показатели TikTok"),
     Card("social_tiktok_watch", "TikTok · Удержание и досмотры", "v_social_content", "table",
-         'SELECT published_at AS "Дата", title AS "Видео", views AS "Просмотры", '
+         "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Дата", LEFT(title, 140) AS "Видео", views AS "Просмотры", '
          'ROUND(duration_s, 1) AS "Длина, с", ROUND(avg_watch_s, 1) AS "Средний просмотр, с", '
          'ROUND(100.0 * avg_watch_s / NULLIF(duration_s, 0), 1) AS "Просмотрено длины, %", '
          'ROUND(finish_rate_pct, 1) AS "Досмотрели, %", '
@@ -190,14 +265,16 @@ SOCIAL_CARDS: list[Card] = [
          "FROM v_social_content WHERE platform = 'youtube' GROUP BY content_type_title ORDER BY 3 DESC",
          "Сравнение Shorts и длинных видео"),
     Card("social_telegram_top", "Telegram · Лучшие посты", "v_social_content", "table",
-         'SELECT published_at AS "Дата", title AS "Пост", views AS "Просмотры", '
+         "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Дата", LEFT(title, 140) AS "Пост", views AS "Просмотры", '
          'likes AS "Реакции", comments AS "Ответы", shares AS "Пересылки", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
          "FROM v_social_content WHERE platform = 'telegram_channel' "
          'ORDER BY views DESC LIMIT 25',
          "Просмотры, реакции, ответы и пересылки Telegram"),
     Card("social_vk_top", "VK · Лучшие публикации", "v_social_content", "table",
-         'SELECT published_at AS "Дата", title AS "Публикация", content_type_title AS "Формат", '
+         "SELECT TO_CHAR(published_at AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Дата", LEFT(title, 140) AS "Публикация", content_type_title AS "Формат", '
          'views AS "Просмотры", reach AS "Охват", likes AS "Лайки", '
          'comments AS "Комментарии", shares AS "Репосты", '
          'engagement_rate AS "Вовлечённость, %", url AS "Ссылка" '
@@ -210,8 +287,10 @@ SOCIAL_CARDS: list[Card] = [
          'SELECT platform_title AS "Площадка", COUNT(*) AS "Публикации", '
          'SUM(has_title) AS "С текстом/названием", SUM(has_url) AS "Со ссылкой", '
          'SUM(has_metrics) AS "С метриками", SUM(CASE WHEN views > 0 THEN 1 ELSE 0 END) '
-         'AS "С просмотрами", MAX(latest_snapshot_date) AS "Последний снимок метрик", '
-         'MAX(published_at) AS "Последняя публикация" '
+         'AS "С просмотрами", '
+         "TO_CHAR(MAX(latest_snapshot_date), 'DD.MM.YYYY') AS \"Последний снимок метрик\", "
+         "TO_CHAR(MAX(published_at) AT TIME ZONE 'Europe/Moscow', 'DD.MM.YYYY HH24:MI') "
+         'AS "Последняя публикация" '
          'FROM v_social_content GROUP BY platform_title ORDER BY 2 DESC',
          "Какие поля реально заполнены по каждой площадке"),
     Card("social_freshness", "Соцсети · Свежесть загрузок", "v_social_channels", "table",
@@ -254,35 +333,39 @@ SOCIAL_CARDS: list[Card] = [
 
 
 def social_grid_layout(cards: list[Card] = SOCIAL_CARDS) -> dict[str, dict]:
-    """Компактная 24-колоночная сетка: KPI → обзор → топы → deep dive."""
+    """Сетка внутри пяти вкладок; номер строки начинается заново на каждой."""
     layout: dict[str, dict] = {}
-    scalars = cards[:6]
-    for i, card in enumerate(scalars):
+    for i, card in enumerate(cards[:6]):
         layout[card.key] = {"row": 0, "col": i * 4, "size_x": 4, "size_y": 4}
 
     rows: list[tuple[str, int, int, int, int]] = [
+        # Обзор
         ("social_platform_overview", 4, 0, 24, 8),
         ("social_views_by_platform", 12, 0, 12, 8),
         ("social_engagement_by_platform", 12, 12, 12, 8),
-        ("social_posts_by_month", 20, 0, 12, 8),
-        ("social_formats", 20, 12, 12, 8),
-        ("social_followers_by_platform", 28, 0, 8, 8),
-        ("social_daily_views", 28, 8, 8, 8),
-        ("social_followers_history", 28, 16, 8, 8),
-        ("social_top_views", 36, 0, 24, 10),
-        ("social_top_er", 46, 0, 24, 10),
-        ("social_tiktok_summary", 56, 0, 24, 6),
-        ("social_tiktok_watch", 62, 0, 24, 10),
-        ("social_youtube_formats", 72, 0, 12, 8),
-        ("social_telegram_top", 72, 12, 12, 10),
-        ("social_vk_top", 82, 0, 12, 10),
-        ("social_data_quality", 82, 12, 12, 10),
-        ("social_freshness", 92, 0, 24, 7),
-        ("social_tiktok_traffic", 99, 0, 12, 8),
-        ("social_tiktok_age", 99, 12, 12, 8),
-        ("social_tiktok_gender", 107, 0, 8, 8),
-        ("social_tiktok_geo", 107, 8, 8, 8),
-        ("social_tiktok_search", 107, 16, 8, 8),
+        ("social_posts_by_month", 20, 0, 24, 8),
+        ("social_daily_views", 28, 0, 24, 8),
+        # Контент
+        ("social_formats", 0, 0, 24, 8),
+        ("social_top_views", 8, 0, 24, 10),
+        ("social_top_er", 18, 0, 24, 10),
+        # Площадки
+        ("social_followers_by_platform", 0, 0, 12, 8),
+        ("social_followers_history", 0, 12, 12, 8),
+        ("social_youtube_formats", 8, 0, 24, 6),
+        ("social_telegram_top", 14, 0, 24, 10),
+        ("social_vk_top", 24, 0, 24, 10),
+        # TikTok
+        ("social_tiktok_summary", 0, 0, 24, 5),
+        ("social_tiktok_watch", 5, 0, 24, 10),
+        ("social_tiktok_traffic", 15, 0, 12, 8),
+        ("social_tiktok_age", 15, 12, 12, 8),
+        ("social_tiktok_gender", 23, 0, 8, 8),
+        ("social_tiktok_geo", 23, 8, 8, 8),
+        ("social_tiktok_search", 23, 16, 8, 8),
+        # Данные
+        ("social_freshness", 0, 0, 24, 7),
+        ("social_data_quality", 7, 0, 24, 10),
     ]
     for key, row, col, size_x, size_y in rows:
         layout[key] = {"row": row, "col": col, "size_x": size_x, "size_y": size_y}

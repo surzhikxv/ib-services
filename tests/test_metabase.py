@@ -7,9 +7,11 @@ from kontur.dashboard.catalog import CARDS, Card
 from kontur.dashboard.metabase import (
     _pg_details,
     card_payload,
+    ensure_dashboard,
     ensure_collection,
     ensure_database,
     grid_layout,
+    resolve_dashboard_tabs,
 )
 
 
@@ -124,3 +126,64 @@ def test_ensure_collection_creates_project_collection():
             return {"id": 8}
 
     assert ensure_collection(FakeMetabase()) == 8
+
+
+def test_resolve_dashboard_tabs_reuses_ids_and_assigns_negative_ids_to_new_tabs():
+    payload, by_key = resolve_dashboard_tabs(
+        [{"id": 41, "name": "Обзор"}],
+        [
+            {"key": "overview", "name": "Обзор"},
+            {"key": "content", "name": "Контент"},
+            {"key": "data", "name": "Данные"},
+        ],
+    )
+
+    assert payload == [
+        {"id": 41, "name": "Обзор"},
+        {"id": -1001, "name": "Контент"},
+        {"id": -1002, "name": "Данные"},
+    ]
+    assert by_key == {"overview": 41, "content": -1001, "data": -1002}
+
+
+def test_ensure_dashboard_places_cards_on_tabs_and_uses_short_titles():
+    card = Card("k", "Соцсети · Просмотры", "v_social_content", "scalar", "SELECT 1")
+
+    class FakeMetabase:
+        def __init__(self):
+            self.payload = None
+
+        def get(self, path):
+            if path == "/api/dashboard":
+                return [{"id": 3, "name": "Соцсети — аналитика"}]
+            if path == "/api/dashboard/3":
+                return {"tabs": [{"id": 10, "name": "Обзор"}]}
+            raise AssertionError(path)
+
+        def put(self, path, json):
+            assert path == "/api/dashboard/3"
+            self.payload = json
+            return {}
+
+        def post(self, path, json):  # pragma: no cover
+            raise AssertionError((path, json))
+
+    mb = FakeMetabase()
+    dashboard_id = ensure_dashboard(
+        mb,
+        {"k": 51},
+        collection_id=5,
+        name="Соцсети — аналитика",
+        cards=[card],
+        layout={"k": {"row": 0, "col": 0, "size_x": 4, "size_y": 4}},
+        tabs=[{"key": "overview", "name": "Обзор"}],
+        card_tabs={"k": "overview"},
+        card_titles={"k": "Просмотры"},
+    )
+
+    assert dashboard_id == 3
+    assert mb.payload["tabs"] == [{"id": 10, "name": "Обзор"}]
+    assert mb.payload["dashcards"][0]["dashboard_tab_id"] == 10
+    assert mb.payload["dashcards"][0]["visualization_settings"] == {
+        "card.title": "Просмотры"
+    }

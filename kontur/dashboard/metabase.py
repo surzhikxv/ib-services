@@ -16,9 +16,12 @@ import httpx
 
 from kontur.dashboard.catalog import CARDS, COLLECTION_NAME, DASHBOARD_NAME, Card
 from kontur.dashboard.social_catalog import (
+    SOCIAL_CARD_TABS,
+    SOCIAL_CARD_TITLES,
     SOCIAL_CARDS,
     SOCIAL_DASHBOARD_DESCRIPTION,
     SOCIAL_DASHBOARD_NAME,
+    SOCIAL_TABS,
     social_grid_layout,
 )
 
@@ -64,6 +67,26 @@ def grid_layout(cards: list[Card]) -> dict[str, dict]:
         layout[c.key] = {"row": row, "col": col, "size_x": chart_w, "size_y": chart_h}
 
     return layout
+
+
+def resolve_dashboard_tabs(
+    existing_tabs: list[dict],
+    tabs: list[dict[str, str]],
+) -> tuple[list[dict], dict[str, int]]:
+    """Сохраняет ID существующих вкладок, а новым выдаёт временные отрицательные ID."""
+    existing_by_name = {tab["name"]: tab["id"] for tab in existing_tabs}
+    payload: list[dict] = []
+    ids_by_key: dict[str, int] = {}
+    # Не пересекаемся с временными ID карточек (-1, -2, ...).
+    next_new_id = -1001
+    for tab in tabs:
+        tab_id = existing_by_name.get(tab["name"])
+        if tab_id is None:
+            tab_id = next_new_id
+            next_new_id -= 1
+        payload.append({"id": tab_id, "name": tab["name"]})
+        ids_by_key[tab["key"]] = tab_id
+    return payload, ids_by_key
 
 
 # --- HTTP-клиент Metabase (исполняется против живого инстанса) ------------
@@ -176,30 +199,49 @@ def ensure_dashboard(
     cards: list[Card] = CARDS,
     layout: dict[str, dict] | None = None,
     description: str = "Продажи, воронка, источники трафика и свежесть данных",
+    tabs: list[dict[str, str]] | None = None,
+    card_tabs: dict[str, str] | None = None,
+    card_titles: dict[str, str] | None = None,
 ) -> int:
     """Создаёт дашборд (если нет) и раскладывает карточки по сетке."""
     existing = _index_by_name(mb.get("/api/dashboard"))
-    dash_id = existing.get(name) or mb.post("/api/dashboard", {"name": name})["id"]
+    existing_dash_id = existing.get(name)
+    dash_id = existing_dash_id or mb.post("/api/dashboard", {"name": name})["id"]
 
     layout = layout or grid_layout(cards)
+    tabs_payload: list[dict] | None = None
+    tab_ids: dict[str, int] = {}
+    if tabs is not None:
+        dashboard = mb.get(f"/api/dashboard/{dash_id}") if existing_dash_id else {"tabs": []}
+        tabs_payload, tab_ids = resolve_dashboard_tabs(dashboard.get("tabs", []), tabs)
+        if card_tabs is None:
+            raise ValueError("для дашборда со вкладками нужен card_tabs")
+
     dashcards = []
     for i, card in enumerate(cards):
         pos = layout[card.key]
-        dashcards.append({
+        dashcard = {
             "id": -(i + 1),  # отрицательные id = новые карточки
             "card_id": card_ids[card.key],
             "row": pos["row"], "col": pos["col"],
             "size_x": pos["size_x"], "size_y": pos["size_y"],
-        })
-    mb.put(
-        f"/api/dashboard/{dash_id}",
-        {
-            "name": name,
-            "description": description,
-            "collection_id": collection_id,
-            "dashcards": dashcards,
-        },
-    )
+        }
+        if tabs is not None:
+            tab_key = card_tabs[card.key]
+            dashcard["dashboard_tab_id"] = tab_ids[tab_key]
+        if card_titles and card.key in card_titles:
+            dashcard["visualization_settings"] = {"card.title": card_titles[card.key]}
+        dashcards.append(dashcard)
+
+    payload = {
+        "name": name,
+        "description": description,
+        "collection_id": collection_id,
+        "dashcards": dashcards,
+    }
+    if tabs_payload is not None:
+        payload["tabs"] = tabs_payload
+    mb.put(f"/api/dashboard/{dash_id}", payload)
     return dash_id
 
 
@@ -221,6 +263,9 @@ def provision(base_url: str, username: str, password: str) -> dict:
             cards=SOCIAL_CARDS,
             layout=social_grid_layout(SOCIAL_CARDS),
             description=SOCIAL_DASHBOARD_DESCRIPTION,
+            tabs=SOCIAL_TABS,
+            card_tabs=SOCIAL_CARD_TABS,
+            card_titles=SOCIAL_CARD_TITLES,
         )
         return {
             "database_id": db_id,

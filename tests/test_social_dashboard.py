@@ -4,7 +4,13 @@ from datetime import date, datetime, timezone
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
 
-from kontur.dashboard.social_catalog import SOCIAL_CARDS, social_grid_layout
+from kontur.dashboard.social_catalog import (
+    SOCIAL_CARD_TABS,
+    SOCIAL_CARD_TITLES,
+    SOCIAL_CARDS,
+    SOCIAL_TABS,
+    social_grid_layout,
+)
 from kontur.dashboard.views import VIEWS, create_views
 from kontur.db import init_db, make_session_factory
 from kontur.models import Channel, ChannelMetric, Content, ContentMetric
@@ -130,10 +136,11 @@ def test_every_social_card_points_to_a_queryable_view():
 def test_social_layout_covers_cards_without_overlap():
     layout = social_grid_layout()
     assert set(layout) == {card.key for card in SOCIAL_CARDS}
-    rectangles = []
+    rectangles_by_tab: dict[str, list[tuple[int, int, int, int]]] = {}
     for card in SOCIAL_CARDS:
         pos = layout[card.key]
         assert pos["col"] + pos["size_x"] <= 24
+        rectangles = rectangles_by_tab.setdefault(SOCIAL_CARD_TABS[card.key], [])
         current = (
             pos["col"], pos["row"],
             pos["col"] + pos["size_x"], pos["row"] + pos["size_y"],
@@ -145,3 +152,15 @@ def test_social_layout_covers_cards_without_overlap():
             )
             assert separated, f"карточки пересекаются: {current} / {previous}"
         rectangles.append(current)
+
+
+def test_social_tabs_and_short_titles_cover_every_card():
+    card_keys = {card.key for card in SOCIAL_CARDS}
+    tab_keys = {tab["key"] for tab in SOCIAL_TABS}
+
+    assert set(SOCIAL_CARD_TABS) == card_keys
+    assert set(SOCIAL_CARD_TITLES) == card_keys
+    assert set(SOCIAL_CARD_TABS.values()) == tab_keys
+    assert [tab["name"] for tab in SOCIAL_TABS] == [
+        "Обзор", "Контент", "Площадки", "TikTok", "Данные"
+    ]
