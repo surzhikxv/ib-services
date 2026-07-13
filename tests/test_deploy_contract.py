@@ -37,3 +37,14 @@ def test_deploy_installs_connector_sync_timer() -> None:
     assert "systemctl enable --now kontur-sync.timer" in deploy
     assert "kontur.cli automation run" in service
     assert "OnCalendar=" in timer
+
+
+def test_deploy_installs_weekly_ai_mentor_timer() -> None:
+    deploy = (ROOT / "ops/deploy.sh").read_text()
+    service = (ROOT / "ops/kontur-ai-mentor.service").read_text()
+    timer = (ROOT / "ops/kontur-ai-mentor.timer").read_text()
+
+    assert "systemctl enable --now kontur-ai-mentor.timer" in deploy
+    assert "ai report --previous-week --send --quiet" in service
+    assert "OnCalendar=*-*-* 04:00:00 UTC" in timer
+    assert "Persistent=true" in timer

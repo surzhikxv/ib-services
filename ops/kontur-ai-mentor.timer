@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate Kontur weekly AI mentor and retry pending delivery daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+RandomizedDelaySec=5m
+Persistent=true
+Unit=kontur-ai-mentor.service
+
+[Install]
+WantedBy=timers.target

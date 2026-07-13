@@ -7,15 +7,19 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
+import os
 import sys
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.schema import CreateTable
 
 from kontur.config import get_settings
 from kontur.db import init_db, make_engine, make_session_factory
-from kontur.models import Base
+from kontur.models import AiReport, Base
 
 
 def _cmd_db_init(args) -> int:
@@ -389,14 +393,94 @@ def _make_llm():
                         proxy_url=settings.llm_proxy_url or None)
 
 
-def _ai_dry(question: str | None) -> int:
+def _previous_iso_week(now: datetime | None = None) -> str:
+    local_now = now or datetime.now(ZoneInfo("Europe/Moscow"))
+    current_monday = local_now.date() - timedelta(days=local_now.weekday())
+    previous_monday = current_monday - timedelta(days=7)
+    year, week, _ = previous_monday.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _existing_weekly_report(factory, period: str) -> AiReport | None:
+    with factory() as session:
+        return session.scalar(
+            select(AiReport)
+            .where(AiReport.kind == "weekly", AiReport.period == period)
+            .order_by(AiReport.created_at.desc(), AiReport.id.desc())
+            .limit(1)
+        )
+
+
+def _telegram_delivery_sent(factory, report_id: int) -> bool:
+    with factory() as session:
+        report = session.get(AiReport, report_id)
+        delivery = (report.digest or {}).get("_delivery") if report else None
+        return bool(isinstance(delivery, dict) and delivery.get("telegram_sent_at"))
+
+
+def _mark_telegram_delivery(factory, report_id: int) -> None:
+    with factory() as session:
+        report = session.get(AiReport, report_id)
+        if report is None:
+            raise RuntimeError(f"AI report {report_id} disappeared before delivery mark")
+        digest = dict(report.digest or {})
+        digest["_delivery"] = {
+            "channel": "telegram",
+            "telegram_sent_at": datetime.now(timezone.utc).isoformat(),
+        }
+        report.digest = digest
+        session.commit()
+
+
+def _send_weekly_report(factory, report: AiReport) -> bool:
+    """Send once and mark only after every Telegram chunk succeeds."""
+    if _telegram_delivery_sent(factory, report.id):
+        print(f"SKIP: weekly report {report.period or report.id} already sent to Telegram")
+        return True
+
+    from kontur.ai.telegram import format_report_for_telegram, send_telegram
+
+    token = (
+        os.getenv("AI_TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    ).strip()
+    chat_id = (
+        os.getenv("AI_TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")
+    ).strip()
+    proxy_url = (
+        os.getenv("AI_TELEGRAM_PROXY_URL")
+        or os.getenv("IG_PROXY_URL")
+        or os.getenv("YT_PROXY_URL")
+        or ""
+    ).strip()
+    if not token or not chat_id:
+        print(
+            "WARN: report stored, Telegram delivery pending: set "
+            "AI_TELEGRAM_BOT_TOKEN/AI_TELEGRAM_CHAT_ID",
+            file=sys.stderr,
+        )
+        return False
+
+    sent = send_telegram(
+        token,
+        chat_id,
+        format_report_for_telegram(report),
+        proxy_url=proxy_url or None,
+    )
+    if not sent:
+        raise RuntimeError("Telegram API did not confirm weekly report delivery")
+    _mark_telegram_delivery(factory, report.id)
+    print(f"OK: weekly report {report.period or report.id} sent to Telegram")
+    return True
+
+
+def _ai_dry(question: str | None, *, period: str | None = None) -> int:
     """Печатает дайджест и промпт без вызова модели (ключ не нужен)."""
     from kontur.ai.digest import build_digest
     from kontur.ai.prompts import SYSTEM_PROMPT, build_question_prompt, build_report_prompt
 
     engine = make_engine(get_settings().database_url)
     factory = make_session_factory(engine)
-    digest = build_digest(factory)
+    digest = build_digest(factory, period=period)
     prompt = build_question_prompt(digest, question) if question else build_report_prompt(digest)
     print("=== SYSTEM ===\n" + SYSTEM_PROMPT)
     print("\n=== PROMPT ===\n" + prompt)
@@ -404,17 +488,31 @@ def _ai_dry(question: str | None) -> int:
 
 
 def _cmd_ai_report(args) -> int:
+    period = _previous_iso_week() if args.previous_week else args.period
     if args.show_prompt:
-        return _ai_dry(None)
+        return _ai_dry(None, period=period)
     from kontur.ai.analyst import generate_report
+
+    factory = make_session_factory(make_engine(get_settings().database_url))
+    if period and not args.force:
+        existing = _existing_weekly_report(factory, period)
+        if existing is not None:
+            if args.send:
+                return 0 if _send_weekly_report(factory, existing) else 3
+            else:
+                print(f"SKIP: weekly report {period} already exists (id={existing.id})")
+            return 0
 
     llm = _make_llm()
     if llm is None:
         print("ERROR: нет LLM_API_KEY в .env (или используй --show-prompt для пробы)", file=sys.stderr)
         return 2
-    factory = make_session_factory(make_engine(get_settings().database_url))
-    report = generate_report(factory, llm, period=args.period)
-    print(report.summary)
+    report = generate_report(factory, llm, period=period)
+    if not args.quiet:
+        print(report.summary)
+
+    if args.send:
+        return 0 if _send_weekly_report(factory, report) else 3
     return 0
 
 
@@ -518,7 +616,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     ai = sub.add_parser("ai", help="ИИ-аналитик").add_subparsers(dest="action", required=True)
     rep = ai.add_parser("report", help="еженедельный разбор по данным")
-    rep.add_argument("--period", default=None, help="метка периода, напр. 2026-W24")
+    period_group = rep.add_mutually_exclusive_group()
+    period_group.add_argument("--period", default=None, help="ISO-неделя, напр. 2026-W24")
+    period_group.add_argument(
+        "--previous-week",
+        action="store_true",
+        help="последняя завершённая ISO-неделя (для таймера)",
+    )
+    rep.add_argument("--force", action="store_true", help="создать повторно, даже если отчёт за период уже есть")
+    rep.add_argument("--send", action="store_true", help="отправить в Telegram, если задан chat_id")
+    rep.add_argument("--quiet", action="store_true", help="не печатать весь разбор в журнал")
     rep.add_argument("--show-prompt", action="store_true", help="показать дайджест и промпт без вызова модели")
     rep.set_defaults(func=_cmd_ai_report)
     ask = ai.add_parser("ask", help="ответ на вопрос своими словами по данным")

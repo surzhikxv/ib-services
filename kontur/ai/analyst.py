@@ -21,7 +21,7 @@ def generate_report(
     session_factory: sessionmaker, llm: LLMClient, *, period: str | None = None, store: bool = True
 ) -> AiReport:
     """Еженедельный разбор простым языком по текущему срезу данных."""
-    digest = build_digest(session_factory)
+    digest = build_digest(session_factory, period=period)
     summary = llm.complete(SYSTEM_PROMPT, build_report_prompt(digest))
     report = AiReport(kind="weekly", period=period, summary=summary, digest=digest, model=llm.model)
     return _save(session_factory, report) if store else report

@@ -199,8 +199,11 @@ curl -fsS http://127.0.0.1:8081/health | grep -q 'ok'
 
 install -m 0644 ops/kontur-sync.service /etc/systemd/system/kontur-sync.service
 install -m 0644 ops/kontur-sync.timer /etc/systemd/system/kontur-sync.timer
+install -m 0644 ops/kontur-ai-mentor.service /etc/systemd/system/kontur-ai-mentor.service
+install -m 0644 ops/kontur-ai-mentor.timer /etc/systemd/system/kontur-ai-mentor.timer
 systemctl daemon-reload
 systemctl enable --now kontur-sync.timer >/dev/null
+systemctl enable --now kontur-ai-mentor.timer >/dev/null
 
 if [ "$systemd_bot_active" = true ]; then
     systemctl disable kontur-bot.service >/dev/null

@@ -1,0 +1,15 @@
+[Unit]
+Description=Kontur weekly AI content and growth mentor
+Requires=docker.service
+After=docker.service network-online.target kontur-sync.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kontur
+Environment=COMPOSE_PROJECT_NAME=kontur
+ExecStart=/usr/bin/flock -n /run/kontur-ai-mentor.lock /usr/bin/docker compose run --rm --no-deps app python -m kontur.cli ai report --previous-week --send --quiet
+TimeoutStartSec=30min
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
