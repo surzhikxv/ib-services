@@ -38,7 +38,7 @@ CARDS: list[Card] = [
          'SELECT subscribers AS "Подписчики" FROM v_kpis', "Всего людей в боте"),
     Card("kpi_paying", "Платящих", "v_kpis", "scalar",
          'SELECT paying_subscribers AS "Покупатели" FROM v_kpis', "Уникальных покупателей"),
-    Card("kpi_conversion", "Конверсия в оплату, %", "v_kpis", "scalar",
+    Card("kpi_conversion", "Конверсия, %", "v_kpis", "scalar",
          'SELECT conversion_pct AS "Конверсия, %" FROM v_kpis', "Платящие / подписчики"),
     Card("kpi_payments", "Оплат", "v_kpis", "scalar",
          'SELECT payments AS "Оплаты" FROM v_kpis', "Всего оплат (тариф можно купить не один)"),
