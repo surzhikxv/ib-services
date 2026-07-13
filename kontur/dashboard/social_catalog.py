@@ -41,6 +41,7 @@ SOCIAL_CARD_TITLES: dict[str, str] = {
     "social_followers_history": "Динамика подписчиков",
     "social_top_views": "Топ публикаций по просмотрам",
     "social_top_er": "Топ публикаций по вовлечённости",
+    "social_tiktok_platform_summary": "TikTok: краткая сводка",
     "social_tiktok_summary": "Главные показатели",
     "social_tiktok_watch": "Удержание и досмотры",
     "social_youtube_formats": "YouTube: Shorts и видео",
@@ -70,7 +71,8 @@ SOCIAL_CARD_TABS: dict[str, str] = {
     # Площадки: аудитория и отдельные срезы Telegram, VK, YouTube.
     **{key: "platforms" for key in (
         "social_followers_by_platform", "social_followers_history",
-        "social_youtube_formats", "social_telegram_top", "social_vk_top",
+        "social_tiktok_platform_summary", "social_youtube_formats",
+        "social_telegram_top", "social_vk_top",
     )},
     # TikTok: расширенная выгрузка удержания и аудитории.
     **{key: "tiktok" for key in (
@@ -239,6 +241,14 @@ SOCIAL_CARDS: list[Card] = [
          "Высокая вовлечённость без публикаций со слишком малой базой просмотров"),
 
     # Площадки
+    Card("social_tiktok_platform_summary", "TikTok · Краткая сводка площадки", "v_social_content", "table",
+         'SELECT COUNT(*) AS "Видео", SUM(views) AS "Просмотры", '
+         'ROUND(AVG(views), 0) AS "Средние просмотры", '
+         'ROUND(100.0 * SUM(engagements) / NULLIF(SUM(views), 0), 2) '
+         'AS "Вовлечённость, %", COALESCE(SUM(new_followers), 0) '
+         'AS "Новые подписчики из видео" '
+         "FROM v_social_content WHERE platform = 'tiktok'",
+         "Компактная сводка TikTok рядом с остальными площадками"),
     Card("social_tiktok_summary", "TikTok · Полная сводка", "v_social_content", "table",
          'SELECT COUNT(*) AS "Видео", SUM(views) AS "Просмотры", SUM(reach) AS "Охват", '
          'SUM(likes) AS "Лайки", SUM(comments) AS "Комментарии", SUM(shares) AS "Репосты", '
@@ -352,7 +362,8 @@ def social_grid_layout(cards: list[Card] = SOCIAL_CARDS) -> dict[str, dict]:
         # Площадки
         ("social_followers_by_platform", 0, 0, 12, 8),
         ("social_followers_history", 0, 12, 12, 8),
-        ("social_youtube_formats", 8, 0, 24, 6),
+        ("social_tiktok_platform_summary", 8, 0, 12, 6),
+        ("social_youtube_formats", 8, 12, 12, 6),
         ("social_telegram_top", 14, 0, 24, 10),
         ("social_vk_top", 24, 0, 24, 10),
         # TikTok
