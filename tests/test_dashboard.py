@@ -71,6 +71,27 @@ def test_revenue_by_source_buckets_unmarked_traffic():
     assert any(r["source"] == "(прямой вход)" and r["payments"] == 3 for r in rows)
 
 
+def test_revenue_by_source_normalizes_explicit_direct_marker():
+    _, factory = _seeded_db()
+    with factory() as s:
+        s.execute(
+            text(
+                "INSERT INTO sources (kind, code, utm_source, created_at) "
+                "VALUES ('start_link', 'utmSource=direct', 'direct', CURRENT_TIMESTAMP)"
+            )
+        )
+        source_id = s.execute(text("SELECT MAX(id) FROM sources")).scalar_one()
+        s.execute(text("UPDATE payments SET source_id = :source_id"), {"source_id": source_id})
+        s.commit()
+    rows = _rows(factory, "SELECT * FROM v_revenue_by_source")
+    assert rows == [{
+        "source": "(прямой вход)",
+        "payments": 3,
+        "buyers": 2,
+        "revenue": 0,
+    }]
+
+
 def test_every_catalog_card_points_to_a_real_queryable_view():
     _, factory = _seeded_db()
     assert CARDS, "каталог не пустой"

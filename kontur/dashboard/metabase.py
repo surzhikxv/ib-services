@@ -14,7 +14,7 @@ import os
 
 import httpx
 
-from kontur.dashboard.catalog import CARDS, DASHBOARD_NAME, Card
+from kontur.dashboard.catalog import CARDS, COLLECTION_NAME, DASHBOARD_NAME, Card
 
 GRID_COLS = 24
 
@@ -126,16 +126,32 @@ def ensure_database(mb: MetabaseClient, name: str = "Контур роста") -
     return db_id
 
 
+def ensure_collection(mb: MetabaseClient, name: str = COLLECTION_NAME) -> int:
+    """Создаёт отдельную корневую коллекцию проекта и возвращает её ID."""
+    existing = mb.get("/api/collection")
+    for collection in existing:
+        if collection.get("name") == name and not collection.get("archived"):
+            return collection["id"]
+    return mb.post(
+        "/api/collection",
+        {"name": name, "color": "#509EE3", "parent_id": None},
+    )["id"]
+
+
 def _index_by_name(items: list[dict]) -> dict[str, int]:
     return {it.get("name"): it["id"] for it in items}
 
 
-def ensure_cards(mb: MetabaseClient, database_id: int) -> dict[str, int]:
+def ensure_cards(
+    mb: MetabaseClient,
+    database_id: int,
+    collection_id: int | None = None,
+) -> dict[str, int]:
     """Создаёт/обновляет вопросы из каталога. Возвращает card.key -> id вопроса."""
     by_name = _index_by_name(mb.get("/api/card"))
     result: dict[str, int] = {}
     for card in CARDS:
-        payload = card_payload(card, database_id)
+        payload = card_payload(card, database_id, collection_id)
         if card.name in by_name:
             cid = by_name[card.name]
             mb.put(f"/api/card/{cid}", payload)
@@ -145,7 +161,12 @@ def ensure_cards(mb: MetabaseClient, database_id: int) -> dict[str, int]:
     return result
 
 
-def ensure_dashboard(mb: MetabaseClient, card_ids: dict[str, int], name: str = DASHBOARD_NAME) -> int:
+def ensure_dashboard(
+    mb: MetabaseClient,
+    card_ids: dict[str, int],
+    collection_id: int | None = None,
+    name: str = DASHBOARD_NAME,
+) -> int:
     """Создаёт дашборд (если нет) и раскладывает карточки по сетке."""
     existing = _index_by_name(mb.get("/api/dashboard"))
     dash_id = existing.get(name) or mb.post("/api/dashboard", {"name": name})["id"]
@@ -160,7 +181,15 @@ def ensure_dashboard(mb: MetabaseClient, card_ids: dict[str, int], name: str = D
             "row": pos["row"], "col": pos["col"],
             "size_x": pos["size_x"], "size_y": pos["size_y"],
         })
-    mb.put(f"/api/dashboard/{dash_id}", {"dashcards": dashcards})
+    mb.put(
+        f"/api/dashboard/{dash_id}",
+        {
+            "name": name,
+            "description": "Продажи, воронка, источники трафика и свежесть данных",
+            "collection_id": collection_id,
+            "dashcards": dashcards,
+        },
+    )
     return dash_id
 
 
@@ -170,8 +199,14 @@ def provision(base_url: str, username: str, password: str) -> dict:
     try:
         mb.login(username, password)
         db_id = ensure_database(mb)
-        card_ids = ensure_cards(mb, db_id)
-        dash_id = ensure_dashboard(mb, card_ids)
-        return {"database_id": db_id, "cards": len(card_ids), "dashboard_id": dash_id}
+        collection_id = ensure_collection(mb)
+        card_ids = ensure_cards(mb, db_id, collection_id)
+        dash_id = ensure_dashboard(mb, card_ids, collection_id)
+        return {
+            "database_id": db_id,
+            "collection_id": collection_id,
+            "cards": len(card_ids),
+            "dashboard_id": dash_id,
+        }
     finally:
         mb.close()

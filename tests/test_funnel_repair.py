@@ -95,4 +95,4 @@ def test_repair_funnel_history_backfills_sources_dates_and_checkout(tmp_path):
             row.source
             for row in session.execute(text("SELECT source FROM v_revenue_by_source"))
         }
-        assert revenue_sources == {"youtube", "direct"}
+        assert revenue_sources == {"youtube", "(прямой вход)"}
