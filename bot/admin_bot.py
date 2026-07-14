@@ -31,6 +31,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
+from bot.admin_reminders import run_tiktok_export_reminder_loop
 from bot.broadcasts import (
     add_admin_account,
     admin_role,
@@ -604,6 +605,12 @@ async def _run() -> None:
         unfinished_broadcast_ids, SESSION_FACTORY
     ):
         _spawn(_run_and_notify(broadcast_id, 0, admin_bot))
+    _spawn(
+        run_tiktok_export_reminder_loop(
+            admin_bot,
+            session_factory=SESSION_FACTORY,
+        )
+    )
 
     while True:
         try:
