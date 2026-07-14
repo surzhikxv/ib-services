@@ -255,3 +255,50 @@ CREATE TABLE payments (
 	FOREIGN KEY(tariff_id) REFERENCES tariffs (id), 
 	FOREIGN KEY(source_id) REFERENCES sources (id)
 );
+
+CREATE TABLE admin_accounts (
+	id SERIAL NOT NULL,
+	tg_user_id VARCHAR(64) NOT NULL,
+	role VARCHAR(32) NOT NULL,
+	active BOOLEAN NOT NULL,
+	display_name VARCHAR(255),
+	added_by_tg_id VARCHAR(64),
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (tg_user_id)
+);
+
+CREATE TABLE broadcasts (
+	id SERIAL NOT NULL,
+	admin_tg_id VARCHAR(64) NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	payload JSONB NOT NULL,
+	buttons JSONB,
+	target_count INTEGER NOT NULL,
+	sent_count INTEGER NOT NULL,
+	failed_count INTEGER NOT NULL,
+	blocked_count INTEGER NOT NULL,
+	started_at TIMESTAMP WITH TIME ZONE,
+	completed_at TIMESTAMP WITH TIME ZONE,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id)
+);
+
+CREATE TABLE broadcast_deliveries (
+	id SERIAL NOT NULL,
+	broadcast_id INTEGER NOT NULL,
+	subscriber_id INTEGER,
+	recipient_tg_id VARCHAR(64) NOT NULL,
+	status VARCHAR(32) NOT NULL,
+	sent_message_id INTEGER,
+	error TEXT,
+	attempted_at TIMESTAMP WITH TIME ZONE,
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (broadcast_id, recipient_tg_id),
+	FOREIGN KEY(broadcast_id) REFERENCES broadcasts (id),
+	FOREIGN KEY(subscriber_id) REFERENCES subscribers (id)
+);

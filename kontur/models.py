@@ -237,6 +237,57 @@ class Subscriber(Base, TimestampMixin):
     payments: Mapped[list["Payment"]] = relationship(back_populates="subscriber")
 
 
+class AdminAccount(Base, TimestampMixin):
+    """Telegram account allowed to use the private administration bot."""
+
+    __tablename__ = "admin_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tg_user_id: Mapped[str] = mapped_column(String(64), unique=True)
+    role: Mapped[str] = mapped_column(String(32), default="admin")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    added_by_tg_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class Broadcast(Base, TimestampMixin):
+    """A durable broadcast created in the administration bot."""
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admin_tg_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    payload: Mapped[dict] = mapped_column(JSONType)
+    buttons: Mapped[list | None] = mapped_column(JSONType)
+    target_count: Mapped[int] = mapped_column(Integer, default=0)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_count: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    deliveries: Mapped[list["BroadcastDelivery"]] = relationship(back_populates="broadcast")
+
+
+class BroadcastDelivery(Base, TimestampMixin):
+    """Per-recipient status for a broadcast, used for progress and restart recovery."""
+
+    __tablename__ = "broadcast_deliveries"
+    __table_args__ = (UniqueConstraint("broadcast_id", "recipient_tg_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    broadcast_id: Mapped[int] = mapped_column(ForeignKey("broadcasts.id"))
+    subscriber_id: Mapped[int | None] = mapped_column(ForeignKey("subscribers.id"))
+    recipient_tg_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    sent_message_id: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    broadcast: Mapped["Broadcast"] = relationship(back_populates="deliveries")
+
+
 class Event(Base):
     """Единая событийная модель воронки. Идемпотентность — по (source_system, dedup_key)."""
 
