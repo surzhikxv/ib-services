@@ -125,10 +125,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kontur}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-kontur}
       ADMIN_BOT_MEDIA_DIR: /data/admin-broadcasts
     command: ["python", "-m", "bot.admin_bot"]
-    # Bind source lets this isolated service be rolled out without replacing the
-    # already-running funnel/API image. The media volume survives restarts.
     volumes:
-      - .:/app:ro
       - ./data/admin-broadcasts:/data/admin-broadcasts
     stop_grace_period: 30s
 

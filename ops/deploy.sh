@@ -116,6 +116,10 @@ old_compose_bot=false
 if docker inspect kontur-bot-1 >/dev/null 2>&1; then
     old_compose_bot=true
 fi
+old_admin_bot=false
+if docker inspect kontur-admin_bot-1 >/dev/null 2>&1; then
+    old_admin_bot=true
+fi
 systemd_bot_active=false
 if systemctl is-active --quiet kontur-bot.service; then
     systemd_bot_active=true
@@ -182,6 +186,11 @@ rollback() {
             systemctl start kontur-bot.service || true
         fi
     fi
+    if [ "$old_admin_bot" = true ]; then
+        docker compose up -d --no-deps admin_bot || true
+    else
+        docker compose rm -sf admin_bot >/dev/null 2>&1 || true
+    fi
     exit "$exit_code"
 }
 trap rollback ERR INT TERM
@@ -190,9 +199,10 @@ if [ "$systemd_bot_active" = true ]; then
     systemctl stop kontur-bot.service
 fi
 
-docker compose up -d --no-deps app bot
+docker compose up -d --no-deps app bot admin_bot
 wait_healthy kontur-app-1
 wait_healthy kontur-bot-1
+wait_healthy kontur-admin_bot-1
 
 curl -fsS http://127.0.0.1:8000/health | grep -q '"status":"ok"'
 curl -fsS http://127.0.0.1:8081/health | grep -q 'ok'
